@@ -1,6 +1,8 @@
+from pathlib import Path
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from utils.utils import load_config
 
@@ -11,71 +13,143 @@ _BLANK_IMAGE = ("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP/////////////////////////////
                 "AREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=")
 
 
-class Narration(BaseModel):
+class Action_Based_Narration_Input(BaseModel):
+    """Text inputs for the single-agent narration model (image passed separately).
+    Fields match the actions_promt.toml placeholders."""
+
+    driving_action: str = Field(description="the ground-truth driving action")
+    drone_data: str = Field(default="none", description="latest drone report")
+    infrastructure_data: str = Field(default="none", description="latest infrastructure report")
+    action_memory: str = Field(default="(no readings)", description="recent HUD actions")
+    narration_memory: str = Field(default="(none yet)", description="previous narrations")
+
+class Action_Based_Narration_Output(BaseModel):
     """Structured narration reply the model must return as JSON."""
 
-    scene: str = Field(description="a short description of the road / intersection "
-                                   "seen in the image")
-    action: str = Field(description="the given driving action, repeated in a few words")
-    narration: str = Field(
-        description="one warm, present-tense, first-person-plural sentence "
-                    "for the passenger, at most 14 words, grounded in the scene")
+    narration: str = Field(description="one warm, present-tense, first-person-plural sentence "
+                            "for the passenger, at most 14 words, grounded in the scene")
+    
+
+## multi-agent narration input and output classes
+
+class Multi_Agent_Narration_Input(BaseModel):
+    """Text inputs for the multi-agent narration model (the two scene
+    descriptions come from the vision agents). Fields match the
+    narration_prompt.toml placeholders."""
+
+    driving_action: str = Field(description="the ground-truth driving action")
+    road_geometry_description: str = Field(description="road-geometry agent output")
+    obstacles_description: str = Field(description="obstacles agent output")
+    drone_data: str = Field(default="none", description="latest drone report")
+    infrastructure_data: str = Field(default="none", description="latest infrastructure report")
+    action_memory: str = Field(default="(no readings)", description="recent HUD actions")
+    narration_memory: str = Field(default="(none yet)", description="previous narrations")
+
+class Road_Geometry_Input(BaseModel):
+    """Bev image input for the model: structured narration reply the model must return as JSON."""
+
+    Bev_image: str = Field(description="Base64 encoded BEV image of the road geometry")
+
+class Road_Geometry_Output(BaseModel):
+    """Bev image output for the model: structured narration reply the model must return as JSON."""
+
+    road_geometry: str = Field(description="A short description of the road geometry seen in the BEV image")
+
+class Obstacles_description_Input(BaseModel):
+    """Front perspective image input for the model: structured narration reply the model must return as JSON."""
+
+    front_perspective_image: str = Field(description="Base64 encoded front view image of the obstacles")
+
+class Obstacles_description_Output(BaseModel):
+    """Front perspective image output for the model: structured narration reply the model must return as JSON."""
+
+    obstacles_description: str = Field(description="A short description of the obstacles seen in the front view image")
+
+class Multi_Agent_Narration_Output(BaseModel):
+    """Structured narration reply the model must return as JSON."""
+
+    Narration: str = Field(description="one warm, present-tense, first-person-plural sentence "
+                            "for the passenger, at most 14 words, grounded in the scene")
+
+    
+class AgentConfig(BaseModel):
+    """One agent's model settings (from the pipeline config's section)."""
+
+    provider: str = Field(default="ollama", description="'ollama' (local) or 'openai'")
+    model: str = Field(description="model id / Ollama tag")
+    temperature: float = Field(default=0.5)
+    num_predict: int | None = Field(default=None, description="max tokens to generate")
+    prompt: str = Field(description="path to the prompt TOML (system_prompt + user_template)")
+    vision: bool = Field(default=False, description="send an image to the model")
 
 
-class OllamaBot:
-    """Ollama-backed narrator: renders a text + image prompt, returns structured JSON."""
+class PromptConfig(BaseModel):
+    """The prompt TOML: system prompt + user template (any model keys are ignored)."""
 
-    def __init__(self, config_path: str):
-        """Build the prompt + model chain from a TOML config.
+    system_prompt: str
+    # accept either "user_template" or "user_prompt" as the key
+    user_template: str = Field(
+        validation_alias=AliasChoices("user_template", "user_prompt"))
+
+
+def _make_model(cfg: AgentConfig):
+    """Build the LangChain chat model for the configured provider."""
+    if cfg.provider == "openai":
+        from langchain_openai import ChatOpenAI  # needs OPENAI_API_KEY in the env
+        return ChatOpenAI(model=cfg.model, temperature=cfg.temperature,
+                          max_tokens=cfg.num_predict)
+    return ChatOllama(model=cfg.model, temperature=cfg.temperature,
+                      num_predict=cfg.num_predict)
+
+
+class LLMBot:
+    """Provider-agnostic agent: an Ollama or OpenAI model + a prompt, returning a
+    structured Pydantic object. Model / temperature / provider come from the
+    AgentConfig; the prompt file supplies system_prompt + user_template."""
+
+    def __init__(self, cfg: AgentConfig, output_model: type[BaseModel],
+                 prompts_dir: str = "") -> None:
+        """Build the prompt + model chain.
 
         Args:
-            config_path (str): path to the TOML config holding model,
-                temperature, system_prompt and user_template.
+            cfg (AgentConfig): provider / model / temperature / prompt path / vision.
+            output_model (type[BaseModel]): schema the model must return as JSON.
+            prompts_dir (str): base dir the cfg.prompt path is resolved against.
         """
-        self.config = load_config(config_path)
-        self.system_prompt = self.config["system_prompt"]
-        self.user_prompt = self.config["user_template"]
-        self.model = ChatOllama(model=self.config["model"],
-                                temperature=self.config.get("temperature", 0.5))
-
-        # The human turn is multimodal: the text template plus an image_url whose
-        # base64 payload is the {image_data} placeholder, filled at invoke time.
-        self.prompt_template = ChatPromptTemplate.from_messages([
-            ("system", self.system_prompt),
-            ("human", [
-                {"type": "text", "text": self.user_prompt},
+        self.vision = cfg.vision
+        prompt_path = str(Path(prompts_dir) / cfg.prompt) if prompts_dir else cfg.prompt
+        pcfg = PromptConfig(**load_config(prompt_path))
+        model = _make_model(cfg)
+        if cfg.vision:
+            human = ("human", [
+                {"type": "text", "text": pcfg.user_template},
                 {"type": "image_url",
                  "image_url": {"url": "data:image/jpeg;base64,{image_data}"}},
-            ]),
-        ])
-        self.chain = self.prompt_template | self.model.with_structured_output(Narration)
+            ])
+        else:
+            human = ("human", pcfg.user_template)
+        prompt = ChatPromptTemplate.from_messages([("system", pcfg.system_prompt), human])
+        self.chain = prompt | model.with_structured_output(output_model)
 
-    def invoke(self, driving_action: str, *, drone_data: str = "none",
-               infrastructure_data: str = "none",
-               action_memory: str = "(no readings)",
-               narration_memory: str = "(none yet)",
-               image: str | None = None) -> Narration:
-        """Render the prompt for one event and return the structured reply.
+    def invoke(self, inputs: BaseModel, *, image: str | None = None) -> BaseModel:
+        """Run the agent from a typed input model and return its output model.
 
         Args:
-            driving_action (str): the ground-truth action to narrate.
-            drone_data (str, optional): latest drone report. Defaults to "none".
-            infrastructure_data (str, optional): latest infrastructure report. Defaults to "none".
-            action_memory (str, optional): recent HUD actions. Defaults to "(no readings)".
-            narration_memory (str, optional): previous narrations. Defaults to "(none yet)".
-            image (str | None, optional): base64 JPEG of the RViz view. Defaults to None.
+            inputs (BaseModel): the agent's *_Input model; its fields fill the
+                prompt placeholders. Any base64 image field (or the `image` arg)
+                is routed to the vision image_data slot.
+            image (str | None): base64 JPEG for a vision agent, if not carried in
+                the input model; a blank frame is used when neither is given.
 
         Returns:
-            Narration: the parsed reply with .scene, .action and .narration fields.
+            BaseModel: an instance of this agent's output_model.
         """
-        return self.chain.invoke({
-            "driving_action": driving_action,
-            "drone_data": drone_data,
-            "infrastructure_data": infrastructure_data,
-            "action_memory": action_memory,
-            "narration_memory": narration_memory,
-            "image_data": image or _BLANK_IMAGE,
-        })
+        fields = inputs.model_dump()
+        if self.vision:
+            for key in [k for k in fields if "image" in k.lower()]:
+                image = image or fields.pop(key)
+            fields["image_data"] = image or _BLANK_IMAGE
+        return self.chain.invoke(fields)
 
     
 

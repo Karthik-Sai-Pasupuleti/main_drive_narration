@@ -12,7 +12,7 @@
 #
 #   ./launch/narration.sh --no-tts                 # extra flags -> main.py
 #   ROS_DOMAIN_ID=5 ./launch/narration.sh          # match run_live.sh's domain
-cd "$(dirname "$0")/.."   # project root
+cd "$(dirname "$0")/../.."   # project root
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"   # same domain as run_live.sh
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
@@ -40,18 +40,14 @@ if ! curl -sf "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
   echo "ERROR: cannot reach Ollama at $OLLAMA_URL (see /tmp/ollama_serve.log)"
   exit 1
 fi
-
-# --- model installed? (read the model = "..." line from the TOML config) ---
-MODEL=$(grep -oP '^\s*model\s*=\s*"\K[^"]+' src/configs/actions_promt.toml)
-if [ -n "$MODEL" ] && ! curl -sf "$OLLAMA_URL/api/tags" | grep -q "\"name\":\"$MODEL\""; then
-  echo "ERROR: model '$MODEL' not found in Ollama. Install it with: ollama pull $MODEL"
-  exit 1
-fi
+# Models + provider (ollama/openai) are set per agent in the pipeline config;
+# main.py surfaces a clear error if a model is missing. For openai agents,
+# export OPENAI_API_KEY before running.
 
 pkill -f "[p]ython.*main.py" 2>/dev/null   # bracket avoids matching this pkill
 sleep 1
 
-echo "Narration: model=$MODEL | hud=/hud/decision | drone=/drone/reports | infra=/infrastructure/reports"
+echo "Narration: config=src/configs/action_pipeline.toml | hud=/hud/decision | drone=/drone/reports | infra=/infrastructure/reports"
 export OLLAMA_HOST="$OLLAMA_URL"
 
 # --- python: prefer the demo_speech_agent venv (has kokoro for the neural voice,
@@ -66,4 +62,4 @@ elif command -v uv >/dev/null 2>&1; then
 else
   PY="python3"
 fi
-exec $PY main.py "$@"
+exec $PY main.py --config src/configs/action_pipeline.toml "$@"

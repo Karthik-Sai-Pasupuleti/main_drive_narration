@@ -12,7 +12,7 @@
 #
 #   BAG=/path/to/other_bag ./launch/run_demo.sh
 #   RVIZ_CONFIG=narration_bev.rviz ./launch/run_demo.sh
-cd "$(dirname "$0")/.."   # project root; all paths below are relative to it
+cd "$(dirname "$0")/../.."   # project root; all paths below are relative to it
 
 # The planner bag has the planning factors the overlays need (the rosbags-HMI
 # camera bags do NOT). Override with BAG=... for a different recording.

@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Secrets (keep .env.example committed, real keys out of git)
+.env
+
+# MLflow eval artifacts
+mlruns/
+eval_results/

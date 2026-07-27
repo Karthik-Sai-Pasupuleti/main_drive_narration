@@ -1,4 +1,3 @@
-model = "qwen2.5vl:3b"
 
 system_prompt = """
 You are an autonomous-driving perception module reading a 3D RViz visualization. Your job is to

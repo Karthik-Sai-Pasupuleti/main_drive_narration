@@ -1,0 +1,28 @@
+# Multi-agent pipeline: BEV road-geometry + perspective obstacles + narration.
+# Run: python main.py --config src/configs/multi_agent_pipeline.toml
+pipeline = "multiagent"
+
+[capture]
+bev = "narration_bev"            # RViz window feeding the road-geometry agent
+perspective = "narration_chase"  # RViz window feeding the obstacles agent
+
+[road_geometry]
+provider = "ollama"
+model = "minicpm-v4.5:latest"
+temperature = 0.2
+vision = true
+prompt = "road_obstacles_action_narration/road_geometry_description_prompt.toml"
+
+[obstacles]
+provider = "ollama"
+model = "minicpm-v4.5:latest"
+temperature = 0.2
+vision = true
+prompt = "road_obstacles_action_narration/obstacles_description_prompt.toml"
+
+[narration]
+provider = "ollama"              # switch to provider="openai", model="gpt-4o-mini" to use OpenAI
+model = "minicpm-v4.5:latest"
+temperature = 0.5
+vision = false
+prompt = "road_obstacles_action_narration/narration_prompt.toml"

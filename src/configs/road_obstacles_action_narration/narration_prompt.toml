@@ -1,6 +1,3 @@
-model = "qwen2.5:3b"
-temperature = 0.5
-num_predict = 80
 
 system_prompt = """
 You are the calm, friendly in-car voice of an autonomous vehicle, speaking to passengers.

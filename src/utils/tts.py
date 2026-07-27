@@ -50,6 +50,8 @@ class TextToSpeech:
         self._pending: str | None = None            # next line to play (latest wins)
         self._closed = False
         self._proc: subprocess.Popen | None = None  # current aplay process
+        self._idle = threading.Event()              # set when nothing is playing/queued
+        self._idle.set()
         if KPipeline is None:
             raise ImportError("kokoro is not installed")
         self._pipeline = KPipeline(lang_code=lang_code, device="cpu")
@@ -65,16 +67,22 @@ class TextToSpeech:
         if not text.strip():
             return
         with self._cond:
+            self._idle.clear()
             self._pending = text          # replaces any waiting line (latest wins)
             if self._proc and self._proc.poll() is None:
                 self._proc.terminate()    # cut off the line currently playing
             self._cond.notify()
+
+    def wait(self, timeout: float | None = None) -> None:
+        """Block until the current line has finished playing (or timeout)."""
+        self._idle.wait(timeout)
 
     def _run(self) -> None:
         """Worker loop: play the latest pending line until closed."""
         while True:
             with self._cond:
                 while self._pending is None and not self._closed:
+                    self._idle.set()      # nothing playing/queued
                     self._cond.wait()
                 if self._closed:
                     return
@@ -151,6 +159,14 @@ class EspeakTTS:
             self._proc.terminate()
         self._proc = subprocess.Popen(["espeak-ng", "-s", str(self._rate), text])
 
+    def wait(self, timeout: float | None = None) -> None:
+        """Block until the current line has finished playing (or timeout)."""
+        if self._proc and self._proc.poll() is None:
+            try:
+                self._proc.wait(timeout)
+            except subprocess.TimeoutExpired:
+                pass
+
     def close(self) -> None:
         """Stop any current playback."""
         if self._proc and self._proc.poll() is None:
@@ -168,6 +184,10 @@ class MuteTTS:
         Args:
             text (str): unused.
         """
+        pass
+
+    def wait(self, timeout: float | None = None) -> None:  # noqa: D102
+        """No-op (nothing plays)."""
         pass
 
     def close(self) -> None:  # noqa: D102

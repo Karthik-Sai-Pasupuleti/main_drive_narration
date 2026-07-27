@@ -1,0 +1,13 @@
+# Single-agent action-narration pipeline.
+# Run: python main.py --config src/configs/action_pipeline.toml
+pipeline = "action"
+
+[capture]
+window = "narration_chase"   # RViz window (xwininfo) grabbed per event
+
+[narration]
+provider = "openai"          # "ollama" (local) or "openai" (needs OPENAI_API_KEY)
+model = "gpt-4o-mini"
+temperature = 0.5
+vision = true
+prompt = "action_narration/actions_promt.toml"

@@ -22,7 +22,7 @@
 #   ROS_DOMAIN_ID=5 ./scripts/run_live.sh                 # join a different live domain
 #   PATH_TOPIC=/my/path/topic ./scripts/run_live.sh       # wait on a different topic
 #   WAIT=0 ./scripts/run_live.sh                          # start RViz immediately, don't wait
-cd "$(dirname "$0")/.."   # project root (rviz_interface); all paths below are relative to it
+cd "$(dirname "$0")/../.."   # project root; all paths below are relative to it
 
 # The LIVE stack publishes on the default domain (0). run_demo.sh deliberately
 # isolates itself on domain 42 to avoid this rig; here we WANT to join it.
@@ -72,7 +72,15 @@ else
   RSP_PID=$!
 fi
 
-trap 'kill $RELAY_PID $OVERLAY_PID $RSP_PID $RVIZ_PID 2>/dev/null' EXIT
+# dummy drone/infra reports for testing (re-published, so the narrator catches
+# them whenever it starts). Set DUMMY_EVENTS=0 to disable for a real run.
+DUMMY_PID=""
+if [ "${DUMMY_EVENTS:-1}" = "1" ]; then
+  python3 src/nodes/dummy_events.py &
+  DUMMY_PID=$!
+fi
+
+trap 'kill $RELAY_PID $OVERLAY_PID $RSP_PID $DUMMY_PID $RVIZ_PID 2>/dev/null' EXIT
 
 # --- WAIT until the live planning path topic is publishing, so RViz's planning
 #     displays subscribe on startup. Skip with WAIT=0. ---
