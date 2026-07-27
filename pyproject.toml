@@ -1,0 +1,18 @@
+[project]
+name = "main-drive-narration"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain-core",
+    "langchain-ollama",
+    "ollama",
+    "numpy",
+    "pillow",
+    "tomli; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+# High-quality neural TTS; the pipeline falls back to espeak-ng / silent without it.
+tts = ["kokoro"]

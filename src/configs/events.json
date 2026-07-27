@@ -1,0 +1,14 @@
+[
+  {
+    "source": "drone",
+    "start": 28,
+    "end": 38,
+    "message": "an occluded pedestrian crossing behind the parked van on the right"
+  },
+  {
+    "source": "infrastructure",
+    "start": 58,
+    "end": 68,
+    "message": "a construction zone 80 metres ahead, right lane closed"
+  }
+]

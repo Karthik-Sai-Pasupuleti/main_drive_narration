@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- Ego vehicle for RViz demo: reuses Autoware's real sedan mesh (car.dae).
+     Mesh is Z-up, centered at origin, length 5.12 m along its +Y, width 2.16 m
+     along X, bottom of tyres at z=-0.777.
+     We rotate it -90 deg about Z so its length aligns with vehicle +X (forward),
+     lift it so the tyres sit on z=0, and push it forward so base_link sits near
+     the rear axle (Autoware convention). Animated purely from /tf (map->base_link). -->
+<robot name="ego_vehicle">
+  <material name="ego_paint">
+    <color rgba="0.10 0.45 0.90 1.0"/>
+  </material>
+  <link name="base_link">
+    <visual>
+      <origin xyz="0.0 0.0 1.554" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///opt/ros/humble/share/autoware_perception_rviz_plugin/meshes/car.dae" scale="4.0 2.0 2.0"/>
+      </geometry>
+      <material name="ego_paint"/>
+    </visual>
+  </link>
+</robot>
