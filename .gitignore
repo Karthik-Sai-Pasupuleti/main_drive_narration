@@ -15,3 +15,6 @@ wheels/
 # MLflow eval artifacts
 mlruns/
 eval_results/
+
+# Pre-rendered audio cues (rebuild with: python src/utils/prerender.py)
+cache/

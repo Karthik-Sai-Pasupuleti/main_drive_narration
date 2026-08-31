@@ -3,7 +3,7 @@
 #
 # Plays the planner bag LOOPING but PAUSED so RViz can subscribe before data
 # flows, brings up the HUD overlay nodes + ego model + RViz, resumes on ENTER,
-# then launches the scripted drone/infrastructure reports (event_publisher.py).
+# then launches the timestamped audio cues (cue_publisher.py).
 # Run ./launch/narration.sh in another terminal for the spoken narration.
 #
 # Usage (from anywhere; the script cd's to the project root):
@@ -16,7 +16,7 @@ cd "$(dirname "$0")/../.."   # project root; all paths below are relative to it
 
 # The planner bag has the planning factors the overlays need (the rosbags-HMI
 # camera bags do NOT). Override with BAG=... for a different recording.
-BAG="${BAG:-../rosbags-HMI/Rosbag_with_planner/rosbag2_2026_05_28-13_40_16}"
+BAG="${BAG:-$HOME/Downloads/rosbag2_2026_08_06-16_20_58}"
 RVIZ_CONFIG="${RVIZ_CONFIG:-narration_chase.rviz}"   # or narration_bev.rviz
 PATH_TOPIC="/planning/scenario_planning/lane_driving/behavior_planning/path"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"   # match narration.sh
@@ -61,7 +61,7 @@ ros2 run robot_state_publisher robot_state_publisher src/rviz/ego_vehicle.urdf \
   --ros-args -p use_sim_time:=true &
 RSP_PID=$!
 
-trap 'kill $BAG_PID $RELAY_PID $OVERLAY_PID $RSP_PID $RVIZ_PID $EVENT_PID 2>/dev/null' EXIT
+trap 'kill $BAG_PID $RELAY_PID $OVERLAY_PID $RSP_PID $RVIZ_PID $CUE_PID 2>/dev/null' EXIT
 
 # --- WAIT until the paused player advertises the planning path topic ---
 echo "Waiting for the bag player to advertise planning topics..."
@@ -87,10 +87,12 @@ else
   echo "WARN: could not resume via service; press SPACE in the bag terminal."
 fi
 
-# --- scripted drone / infrastructure reports (t=0 aligns with drive start) ---
-python3 src/nodes/event_publisher.py --events-file src/configs/events.json \
-  --ros-args -p use_sim_time:=false &
-EVENT_PID=$!
+# --- scripted audio cues, fired on rosbag /clock time (t=0 = drive start) ---
+# Anchors live in src/configs/audio_config/*.json; build the WAVs first with
+#   python src/utils/prerender.py
+# main.py plays them, so it must be running (./launch/action_pipeline/narration.sh).
+python3 src/nodes/cue_publisher.py --ros-args -p use_sim_time:=false &
+CUE_PID=$!
 
 # --- block until RViz is closed; the EXIT trap then stops everything ---
 wait $RVIZ_PID

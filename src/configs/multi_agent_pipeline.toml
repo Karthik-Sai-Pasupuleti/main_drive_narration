@@ -8,21 +8,21 @@ perspective = "narration_chase"  # RViz window feeding the obstacles agent
 
 [road_geometry]
 provider = "ollama"
-model = "minicpm-v4.5:latest"
-temperature = 0.2
+model = "gemma4:12b"
+temperature = 0.5
 vision = true
 prompt = "road_obstacles_action_narration/road_geometry_description_prompt.toml"
 
 [obstacles]
 provider = "ollama"
-model = "minicpm-v4.5:latest"
-temperature = 0.2
+model = "gemma4:12b"
+temperature = 0.5
 vision = true
 prompt = "road_obstacles_action_narration/obstacles_description_prompt.toml"
 
 [narration]
 provider = "ollama"              # switch to provider="openai", model="gpt-4o-mini" to use OpenAI
-model = "minicpm-v4.5:latest"
+model = "gemma4:31b"
 temperature = 0.5
 vision = false
 prompt = "road_obstacles_action_narration/narration_prompt.toml"

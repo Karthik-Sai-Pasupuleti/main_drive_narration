@@ -14,7 +14,8 @@
 #   DUMMY_EVENTS=0 ./launch/multiple_agent_pipleine/run_demo.sh   # no test reports
 cd "$(dirname "$0")/../.."   # project root
 
-BAG="${BAG:-../rosbags-HMI/Rosbag_with_planner/rosbag2_2026_05_28-13_40_16}"
+# BAG="${BAG:-../rosbags-HMI/Rosbag_with_planner/rosbag2_2026_05_28-13_40_16}"
+BAG="${BAG:-$HOME/Downloads/rosbag2_2026_08_06-16_20_58}"
 PATH_TOPIC="/planning/scenario_planning/lane_driving/behavior_planning/path"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 

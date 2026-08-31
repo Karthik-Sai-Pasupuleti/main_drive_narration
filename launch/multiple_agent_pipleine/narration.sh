@@ -25,7 +25,7 @@ export OLLAMA_HOST="$OLLAMA_URL"
 pkill -f "[m]ain.py" 2>/dev/null
 sleep 1
 
-# prefer the demo_speech_agent venv (has kokoro for the neural voice)
-PY="../demo_speech_agent/.venv/bin/python"
+# prefer the speech_agent venv (has kokoro for the neural voice)
+PY="../speech_agent/.venv/bin/python"
 [ -x "$PY" ] || PY=python3
 exec "$PY" main.py --config src/configs/multi_agent_pipeline.toml "$@"

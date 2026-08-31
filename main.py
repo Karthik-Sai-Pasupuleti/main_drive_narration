@@ -17,6 +17,7 @@ import argparse
 import base64
 import csv
 import io
+import json
 import queue
 import sys
 import threading
@@ -37,12 +38,14 @@ from bot.bot import (AgentConfig, LLMBot,                        # noqa: E402
                      Multi_Agent_Narration_Input, Multi_Agent_Narration_Output,
                      Road_Geometry_Input, Road_Geometry_Output,
                      Obstacles_description_Input, Obstacles_description_Output)
-from utils.tts import make_tts                                   # noqa: E402
+from utils.tts import (PRIORITY_CUE, PRIORITY_NARRATION,         # noqa: E402
+                       make_tts)
 from utils.utils import load_config, load_env                    # noqa: E402
 from utils.vision import capture, rviz_bbox                      # noqa: E402
 from utils.vehicle_actions_extraction import VehicleActionsExtractor  # noqa: E402
 
 CONFIGS_DIR = SRC / "configs"
+CUE_MANIFEST = ROOT / "cache" / "audio" / "manifest.json"
 AGENT_ROLES = ("road_geometry", "obstacles", "narration")
 CSV_FIELDS = ["pipeline", "event", "model", "driving_action", "road_geometry",
               "obstacles", "narration", "road_s", "obstacles_s", "narration_s",
@@ -94,7 +97,8 @@ class Narrator(Node):
     eval_mode=True, every event is logged to MLflow."""
 
     def __init__(self, cfg: dict, use_tts: bool = True, eval_mode: bool = False,
-                 experiment: str = "narration_eval") -> None:
+                 experiment: str = "narration_eval",
+                 cue_manifest: str | None = None) -> None:
         super().__init__("narrator")
         self.pipeline = cfg["pipeline"]
         self.eval = eval_mode
@@ -130,6 +134,12 @@ class Narrator(Node):
         self.create_subscription(String, "/drone/reports", self.on_drone, 10)
         self.create_subscription(String, "/infrastructure/reports", self.on_infra, 10)
 
+        # Scripted cues: pre-rendered WAVs fired by cue_publisher.py at fixed
+        # drive timestamps. They bypass the LLM entirely (no capture, no queue)
+        # so the audio lands on the frame the timestamp was authored against.
+        self._cues = self._load_cues(cue_manifest or CUE_MANIFEST)
+        self.create_subscription(String, "/narration/cue", self.on_cue, 10)
+
         self._mlflow = None
         if self.eval:
             import mlflow
@@ -137,6 +147,42 @@ class Narrator(Node):
             self._mlflow = mlflow
         self.get_logger().info(f"narrator running: {self.pipeline} pipeline"
                                + (" [eval -> mlflow]" if self.eval else ""))
+
+    # ------------------------------------------------------------ scripted cues
+    def _load_cues(self, path) -> dict:
+        """Load the pre-rendered cue manifest, or {} if it hasn't been built.
+
+        Args:
+            path: cache/audio/manifest.json written by src/utils/prerender.py.
+
+        Returns:
+            dict: cue key -> manifest entry (wav, text, duration_s, at, ...).
+        """
+        manifest = Path(path)
+        if not manifest.exists():
+            self.get_logger().info(
+                f"no cue manifest at {manifest} (run 'python src/utils/prerender.py' "
+                "to enable the scripted audio cues)")
+            return {}
+        cues = json.loads(manifest.read_text(encoding="utf-8")).get("cues", {})
+        self.get_logger().info(f"{len(cues)} scripted cues loaded from {manifest.name}")
+        return cues
+
+    def on_cue(self, msg: String) -> None:
+        """Play a pre-rendered cue; it outranks LLM narration so it can't be cut off."""
+        cue = self._cues.get(msg.data)
+        if cue is None:
+            self.get_logger().warning(
+                f"unknown cue {msg.data!r}; re-run src/utils/prerender.py")
+            return
+        wav = ROOT / cue["wav"]
+        if not wav.exists():
+            self.get_logger().warning(f"cue {msg.data}: missing WAV {wav}")
+            return
+        self.get_logger().info(
+            f"CUE {msg.data} ({cue.get('duration_s', 0.0):.1f}s): {cue['text']}")
+        self._memory.append(cue["text"])   # the LLM sees what was already spoken
+        self.tts.play_file(str(wav), priority=PRIORITY_CUE)
 
     # ------------------------------------------------------------ triggers
     def on_action(self, direction: str, phase: str) -> None:
@@ -190,7 +236,8 @@ class Narrator(Node):
             return
         self.get_logger().info(f"NARRATION: {line}")
         self._memory.append(line)
-        _, res["speech_s"] = _timed(lambda: (self.tts.speak(line), self.tts.wait(60.0)))
+        _, res["speech_s"] = _timed(lambda: (self.tts.speak(line, PRIORITY_NARRATION),
+                                             self.tts.wait(60.0)))
         self.event_count += 1
         self.records.append(self._record(job, res))
         if self._mlflow is not None:
@@ -285,7 +332,7 @@ class Narrator(Node):
 
     def close(self) -> None:
         self._jobs.put(None)
-        self._worker.join(timeout=5.0)
+        self._worker.join(timeout=60.0)   # let an in-flight event finish logging (MLflow)
         self.tts.close()
         self.extractor.destroy_node()
         self.destroy_node()
@@ -305,12 +352,14 @@ def main(argv=None) -> None:
     parser.add_argument("--model", default=None, help="override all agents' model")
     parser.add_argument("--provider", default=None, help="override provider (ollama/openai)")
     parser.add_argument("--experiment", default="narration_eval", help="MLflow experiment")
+    parser.add_argument("--cues", default=str(CUE_MANIFEST),
+                        help="pre-rendered cue manifest (src/utils/prerender.py)")
     opts, ros_argv = parser.parse_known_args(argv)
     cfg = apply_model_override(load_config(opts.config), opts.model, opts.provider)
 
     rclpy.init(args=ros_argv)
     node = Narrator(cfg, use_tts=not opts.no_tts, eval_mode=opts.eval,
-                    experiment=opts.experiment)
+                    experiment=opts.experiment, cue_manifest=opts.cues)
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     executor.add_node(node.extractor)

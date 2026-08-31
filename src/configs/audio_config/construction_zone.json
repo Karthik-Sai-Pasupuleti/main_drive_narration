@@ -1,0 +1,11 @@
+{
+  "source": "infrastructure",
+  "voice": "af_heart",
+  "messages": [
+    {
+      "id": "right_lane_closed",
+      "at": 21.0,
+      "text": "We are shifting to the left because we have received information from the robot that there is a construction zone eighty metres ahead with the right lane closed"
+    }
+  ]
+}

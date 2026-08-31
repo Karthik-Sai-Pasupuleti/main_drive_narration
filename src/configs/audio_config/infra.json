@@ -1,0 +1,12 @@
+{
+  "source": "infrastructure",
+  "voice": "af_heart",
+  "messages": [
+    {
+      "id": "signal_out",
+      "at": 0.5,
+      "text": "We are slowing down because we have received information from the infrastructure pole that an occluded pedestrian is crossing ahead of the parked van"
+    }
+ 
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "source": "drone",
+  "voice": "af_heart",
+  "messages": [
+    {
+      "id": "occluded_pedestrian",
+      "at": 11.5,
+      "text": "We are slowing down because we have received information from the drone that there is a crash ahead of the road"
+    }
+  ]
+}

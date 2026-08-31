@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-agent drive narration — pipeline architecture</title>
+<style>
+  :root{
+    --bg:#f4f7f9; --panel:#ffffff; --panel-2:#eef3f6; --inset:#f0f4f7;
+    --ink:#111821; --muted:#57636f; --faint:#8593a1;
+    --line:#d7dee6; --line-strong:#c1ccd6;
+    --accent:#0e97ac; --accent-ink:#075664; --accent-soft:#dcf0f3;
+    --warn:#b0701a; --warn-soft:#f6ead4;
+    --ok:#2f8f57; --ok-soft:#dcefe2;
+    --radius:9px;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --shadow:0 1px 2px rgba(16,24,33,.04),0 6px 20px rgba(16,24,33,.05);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0b0f14; --panel:#121a23; --panel-2:#0e151d; --inset:#0f161e;
+    --ink:#e7eef5; --muted:#93a2b2; --faint:#63748699;
+    --line:#212c38; --line-strong:#30404f;
+    --accent:#2bbad0; --accent-ink:#9ee6f0; --accent-soft:#0e2a31;
+    --warn:#d5972f; --warn-soft:#2b2312;
+    --ok:#48b578; --ok-soft:#112a1c;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="light"]{
+    --bg:#f4f7f9; --panel:#ffffff; --panel-2:#eef3f6; --inset:#f0f4f7;
+    --ink:#111821; --muted:#57636f; --faint:#8593a1;
+    --line:#d7dee6; --line-strong:#c1ccd6;
+    --accent:#0e97ac; --accent-ink:#075664; --accent-soft:#dcf0f3;
+    --warn:#b0701a; --warn-soft:#f6ead4; --ok:#2f8f57; --ok-soft:#dcefe2;
+    --shadow:0 1px 2px rgba(16,24,33,.04),0 6px 20px rgba(16,24,33,.05);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0b0f14; --panel:#121a23; --panel-2:#0e151d; --inset:#0f161e;
+    --ink:#e7eef5; --muted:#93a2b2; --faint:#637486;
+    --line:#212c38; --line-strong:#30404f;
+    --accent:#2bbad0; --accent-ink:#9ee6f0; --accent-soft:#0e2a31;
+    --warn:#d5972f; --warn-soft:#2b2312; --ok:#48b578; --ok-soft:#112a1c;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 26px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(circle at 1px 1px,var(--line) 1px,transparent 0);
+    background-size:26px 26px;}
+  .wrap{max-width:1010px;margin:0 auto;padding:44px 22px 72px}
+
+  /* ---- hero ---- */
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent-ink);background:var(--accent-soft);display:inline-block;
+    padding:5px 10px;border-radius:5px;border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
+  h1{font-size:clamp(25px,4.2vw,34px);line-height:1.12;margin:16px 0 8px;font-weight:680;
+    letter-spacing:-.015em;text-wrap:balance;max-width:20ch}
+  .sub{color:var(--muted);font-size:16px;max-width:62ch;margin:0}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:22px;padding-top:18px;
+    border-top:1px solid var(--line)}
+  .lg{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;
+    letter-spacing:.04em;color:var(--muted)}
+  .dot{width:10px;height:10px;border-radius:3px;flex:none}
+  .d-src{background:var(--faint)} .d-trig{background:var(--warn)}
+  .d-vis{background:var(--accent)} .d-fuse{background:var(--accent);box-shadow:inset 0 0 0 2px var(--panel),0 0 0 2px var(--accent)}
+  .d-out{background:var(--ok)}
+
+  /* ---- flow spine ---- */
+  .flow{margin-top:30px;display:flex;flex-direction:column;align-items:stretch}
+  .arrow{align-self:center;display:flex;flex-direction:column;align-items:center;margin:2px 0}
+  .arrow .ln{width:2px;height:26px;background:linear-gradient(var(--line-strong),var(--accent))}
+  .arrow .hd{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;
+    border-top:7px solid var(--accent)}
+  .arrow.split .cap{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--faint);
+    margin-bottom:3px;text-transform:uppercase}
+
+  .stage{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);overflow:hidden}
+  .stage-hd{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+    padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+  .stage-hd h2{margin:0;font-size:13px;font-family:var(--mono);letter-spacing:.11em;
+    text-transform:uppercase;font-weight:620;color:var(--ink)}
+  .stage-hd .meta{font-family:var(--mono);font-size:11px;color:var(--faint);letter-spacing:.04em}
+  .stage-body{padding:16px}
+
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:1fr 1fr}
+  @media(max-width:660px){.g2{grid-template-columns:1fr}}
+
+  /* ---- nodes ---- */
+  .node{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px 14px;
+    position:relative}
+  .node.tint{background:var(--inset)}
+  .badge{font-family:var(--mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+    padding:3px 7px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+  .b-trig{color:var(--warn);background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
+  .b-vis{color:var(--accent-ink);background:var(--accent-soft);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+  .b-fuse{color:#f4feff;background:var(--accent);border:1px solid var(--accent)}
+  .b-out{color:var(--ok);background:var(--ok-soft);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+  .b-src{color:var(--muted);background:var(--panel-2);border:1px solid var(--line-strong)}
+
+  .node h3{margin:9px 0 3px;font-size:15.5px;font-weight:640;letter-spacing:-.01em}
+  .node p{margin:0;color:var(--muted);font-size:13.5px}
+  .mono{font-family:var(--mono)}
+  .tag{font-family:var(--mono);font-size:12px;background:var(--inset);border:1px solid var(--line);
+    padding:1.5px 6px;border-radius:5px;color:var(--ink);white-space:nowrap}
+  .topic{color:var(--accent-ink)}
+
+  .io{margin-top:11px;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:baseline;
+    border-top:1px dashed var(--line);padding-top:10px}
+  .io dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--faint);white-space:nowrap}
+  .io dd{margin:0;font-size:13px;color:var(--ink);min-width:0;overflow-wrap:anywhere}
+  .io dd .tag{font-size:11.5px}
+
+  .example{margin-top:10px;background:var(--inset);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:0 6px 6px 0;padding:8px 11px;font-size:12.5px;color:var(--muted)}
+  .example b{color:var(--faint);font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;font-weight:600;display:block;margin-bottom:3px}
+  .example .q{color:var(--ink);font-style:italic}
+
+  .triggers{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media(max-width:660px){.triggers{grid-template-columns:1fr}}
+  ul.clean{margin:9px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px}
+  ul.clean li{font-size:12.8px;color:var(--muted);display:flex;gap:8px;align-items:baseline}
+  ul.clean li::before{content:"→";color:var(--accent);font-family:var(--mono);flex:none}
+  .actset{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
+  .actset .tag{font-size:11px}
+  .actset .cur{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+
+  .two-views{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .view{flex:1 1 210px;background:var(--inset);border:1px solid var(--line);border-radius:7px;padding:10px 12px}
+  .view .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-ink)}
+  .view .t{font-weight:600;font-size:13.5px;margin:2px 0 2px}
+  .view .d{font-size:12.5px;color:var(--muted)}
+
+  footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--faint);font-family:var(--mono);letter-spacing:.02em;line-height:1.7}
+  footer .tag{font-size:11px}
+  a{color:var(--accent-ink)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .flow>*{animation:rise .5s ease both}
+  .flow>*:nth-child(2){animation-delay:.05s}.flow>*:nth-child(3){animation-delay:.1s}
+  .flow>*:nth-child(4){animation-delay:.15s}.flow>*:nth-child(5){animation-delay:.2s}
+  .flow>*:nth-child(6){animation-delay:.25s}.flow>*:nth-child(7){animation-delay:.3s}
+  .flow>*:nth-child(8){animation-delay:.35s}.flow>*:nth-child(9){animation-delay:.4s}
+  @media(prefers-reduced-motion:reduce){.flow>*{animation:none}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <span class="eyebrow">ROS 2 · RViz · vision-language pipeline</span>
+    <h1>Multi-agent drive narration</h1>
+    <p class="sub">Two vision agents read the scene from two RViz camera views; a text agent fuses their
+      descriptions with the current driving action into one spoken sentence for the passenger.</p>
+    <div class="legend" aria-label="node categories">
+      <span class="lg"><span class="dot d-src"></span>Source / RViz</span>
+      <span class="lg"><span class="dot d-trig"></span>Trigger</span>
+      <span class="lg"><span class="dot d-vis"></span>Vision agent</span>
+      <span class="lg"><span class="dot d-fuse"></span>Fusion agent</span>
+      <span class="lg"><span class="dot d-out"></span>Output</span>
+    </div>
+  </header>
+
+  <div class="flow">
+
+    <!-- STAGE 1: sources & triggers -->
+    <section class="stage">
+      <div class="stage-hd"><h2>1 · Sources &amp; triggers</h2><span class="meta">ROS 2 · sim time</span></div>
+      <div class="stage-body">
+        <div class="node tint">
+          <span class="badge b-src">Scene · rosbag → RViz</span>
+          <div class="two-views">
+            <div class="view"><div class="k">BEV · top-down</div><div class="t">narration_bev</div>
+              <div class="d">Cyan road-edge lines + planned path — the road-geometry view.</div></div>
+            <div class="view"><div class="k">Perspective · chase</div><div class="t">narration_chase</div>
+              <div class="d">Forward view with 3D vehicles, cyclists, pedestrians — the obstacles view.</div></div>
+          </div>
+          <div class="io"><dt>HUD</dt><dd><span class="tag">hud_relay.py</span> + <span class="tag">factor_overlay.py</span>
+            → <span class="tag topic">/hud/decision</span> (speed · state · maneuver)</dd></div>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="triggers">
+          <div class="node">
+            <span class="badge b-trig">Trigger · turn</span>
+            <h3>Intersection turn</h3>
+            <p><span class="mono">VehicleActionsExtractor</span> watches the HUD and fires on a left/right
+              turn at an intersection.</p>
+            <div class="io"><dt>from</dt><dd><span class="tag topic">/hud/decision</span></dd>
+              <dt>action</dt><dd><span class="tag">TURN&nbsp;LEFT/RIGHT (intersection)</span></dd></div>
+          </div>
+          <div class="node">
+            <span class="badge b-trig">Trigger · drone</span>
+            <h3>Drone report</h3>
+            <p>An external aerial report of a hazard ahead makes the car slow down.</p>
+            <div class="io"><dt>from</dt><dd><span class="tag topic">/drone/reports</span></dd>
+              <dt>action</dt><dd><span class="tag">SLOW&nbsp;DOWN (external report)</span></dd></div>
+          </div>
+          <div class="node">
+            <span class="badge b-trig">Trigger · infra</span>
+            <h3>Infrastructure report</h3>
+            <p>A roadside-infrastructure hazard report also triggers a slow-down.</p>
+            <div class="io"><dt>from</dt><dd><span class="tag topic">/infrastructure/reports</span></dd>
+              <dt>action</dt><dd><span class="tag">SLOW&nbsp;DOWN (external report)</span></dd></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="arrow" aria-hidden="true"><span class="ln"></span><span class="hd"></span></div>
+
+    <!-- STAGE 2: capture -->
+    <section class="stage">
+      <div class="stage-hd"><h2>2 · Capture</h2><span class="meta">PIL ImageGrab · serial queue</span></div>
+      <div class="stage-body">
+        <div class="node tint">
+          <span class="badge b-src">On trigger</span>
+          <h3>Grab both RViz views as JPEGs</h3>
+          <p>A single serial worker snapshots each RViz window region and routes the frames to the two
+            vision agents. Best-effort: if a grab fails, the pipeline narrates text-only.</p>
+          <div class="io">
+            <dt>bev →</dt><dd>road-geometry agent <span class="tag">base64 JPEG</span></dd>
+            <dt>front →</dt><dd>obstacles agent <span class="tag">base64 JPEG</span></dd>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="arrow split" aria-hidden="true"><span class="cap">fan out — two vision agents</span><span class="ln"></span><span class="hd"></span></div>
+
+    <!-- STAGE 3: perception agents -->
+    <section class="stage">
+      <div class="stage-hd"><h2>3 · Perception agents</h2><span class="meta">vision · run per event</span></div>
+      <div class="stage-body">
+        <div class="grid g2">
+          <div class="node">
+            <span class="badge b-vis">Vision agent</span>
+            <h3>Road-geometry</h3>
+            <p>Traces the cyan road-edge lines in the BEV frame and describes the road shape ahead —
+              straight, a gentle or sharp bend, a fork, an intersection.</p>
+            <dl class="io">
+              <dt>in</dt><dd>BEV image <span class="tag">narration_bev</span></dd>
+              <dt>prompt</dt><dd><span class="tag">road_geometry_description_prompt.toml</span></dd>
+              <dt>out</dt><dd><span class="tag">road_geometry</span> · 1–2 sentences</dd>
+            </dl>
+            <div class="example"><b>example output</b>
+              <span class="q">“The road runs straight ahead for a short distance before bending gently to the left.”</span></div>
+          </div>
+          <div class="node">
+            <span class="badge b-vis">Vision agent</span>
+            <h3>Obstacles</h3>
+            <p>Reports only the vehicles, cyclists and pedestrians around the ego — their type, side, and
+              whether any sits inside the highlighted lane ahead.</p>
+            <dl class="io">
+              <dt>in</dt><dd>front image <span class="tag">narration_chase</span></dd>
+              <dt>prompt</dt><dd><span class="tag">obstacles_description_prompt.toml</span></dd>
+              <dt>out</dt><dd><span class="tag">obstacles_description</span> · 1–2 sentences</dd>
+            </dl>
+            <div class="example"><b>example output</b>
+              <span class="q">“A pedestrian is on the left beside the corridor, not blocking the path.”</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="arrow split" aria-hidden="true"><span class="cap">two descriptions + action + memory → fuse</span><span class="ln"></span><span class="hd"></span></div>
+
+    <!-- STAGE 4: narration fusion -->
+    <section class="stage">
+      <div class="stage-hd"><h2>4 · Narration agent</h2><span class="meta">text-only · fusion</span></div>
+      <div class="stage-body">
+        <div class="node">
+          <span class="badge b-fuse">Fusion agent</span>
+          <h3>Compose one spoken sentence</h3>
+          <p>Fuses the ground-truth driving action with the two scene descriptions and short memory into a
+            single warm, present-tense, first-person-plural line (≤ 14 words). The action is the ground
+            truth the sentence must convey — geometry and obstacles only ground it.</p>
+          <dl class="io">
+            <dt>inputs</dt><dd><span class="tag">driving_action</span> <span class="tag">road_geometry</span>
+              <span class="tag">obstacles</span> <span class="tag">drone_data</span>
+              <span class="tag">infrastructure_data</span> <span class="tag">action_memory</span>
+              <span class="tag">narration_memory</span></dd>
+            <dt>prompt</dt><dd><span class="tag">narration_prompt.toml</span></dd>
+            <dt>out</dt><dd><span class="tag">Narration</span> · one sentence</dd>
+          </dl>
+          <div class="actset" aria-label="fixed action set">
+            <span class="tag cur">TURN LEFT (intersection)</span>
+            <span class="tag">TURN RIGHT (intersection)</span>
+            <span class="tag">SLOW DOWN (external report)</span>
+            <span class="tag">GREETING</span>
+          </div>
+          <div class="example"><b>example narration</b>
+            <span class="q">“We're turning left as the road curves gently ahead.”</span></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="arrow" aria-hidden="true"><span class="ln"></span><span class="hd"></span></div>
+
+    <!-- STAGE 5: outputs -->
+    <section class="stage">
+      <div class="stage-hd"><h2>5 · Outputs</h2><span class="meta">speech + eval logging</span></div>
+      <div class="stage-body">
+        <div class="grid g2">
+          <div class="node">
+            <span class="badge b-out">Live</span>
+            <h3>Speech &amp; memory</h3>
+            <ul class="clean">
+              <li>Neural TTS (kokoro) speaks the sentence to the passenger.</li>
+              <li>The line is appended to <span class="tag">narration_memory</span> so the journey stays coherent.</li>
+            </ul>
+          </div>
+          <div class="node">
+            <span class="badge b-out">Eval mode</span>
+            <h3>MLflow + CSV</h3>
+            <ul class="clean">
+              <li>One run per event: the two input images, all three text outputs.</li>
+              <li>Per-agent latency <span class="tag">road_s</span> <span class="tag">obstacles_s</span>
+                <span class="tag">narration_s</span> → <span class="tag">mlflow.db</span> + <span class="tag">eval/*.csv</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    Each agent is an independent LLM + prompt, configured per role in
+    <span class="tag">src/configs/multi_agent_pipeline.toml</span> — provider <span class="tag">ollama</span>
+    or <span class="tag">openai</span>, model swappable per agent (road / obstacles / narration).
+    Shared front-end (trigger detection + capture) feeds a serial worker so events narrate one at a time.
+  </footer>
+</main>
+</body>
+</html>

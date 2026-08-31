@@ -50,14 +50,14 @@ sleep 1
 echo "Narration: config=src/configs/action_pipeline.toml | hud=/hud/decision | drone=/drone/reports | infra=/infrastructure/reports"
 export OLLAMA_HOST="$OLLAMA_URL"
 
-# --- python: prefer the demo_speech_agent venv (has kokoro for the neural voice,
+# --- python: prefer the speech_agent venv (has kokoro for the neural voice,
 #     + langchain/ollama); this project's own env has no kokoro, so uv run would
 #     fall back to the robotic espeak-ng voice. ---
-PY="../demo_speech_agent/.venv/bin/python"
+PY="../speech_agent/.venv/bin/python"
 if [ -x "$PY" ]; then
-  echo "Using demo_speech_agent venv python (kokoro TTS)."
+  echo "Using speech_agent venv python (kokoro TTS)."
 elif command -v uv >/dev/null 2>&1; then
-  echo "WARN: demo_speech_agent venv not found; using 'uv run' (no kokoro -> espeak voice)."
+  echo "WARN: speech_agent venv not found; using 'uv run' (no kokoro -> espeak voice)."
   PY="uv run python"
 else
   PY="python3"

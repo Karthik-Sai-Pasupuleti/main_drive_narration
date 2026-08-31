@@ -6,8 +6,8 @@ pipeline = "action"
 window = "narration_chase"   # RViz window (xwininfo) grabbed per event
 
 [narration]
-provider = "openai"          # "ollama" (local) or "openai" (needs OPENAI_API_KEY)
-model = "gpt-4o-mini"
+provider = "ollama"          # local only - no API keys anywhere in this pipeline
+model = "qwen2.5vl:3b"       # vision=true needs a VLM; minicpm-v4.5 is the heavier option
 temperature = 0.5
 vision = true
 prompt = "action_narration/actions_promt.toml"
