@@ -1,0 +1,29 @@
+# Build context hygiene: without this, Docker copies ~20 GB to itself before
+# the first RUN even starts.
+
+# Python leftovers
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Experiment data - huge, and regenerated inside the container anyway
+mlruns/
+mlflow.db
+eval/turn_captures/
+cache/
+
+# History
+.git/
+.gitignore
+
+# Secrets: NEVER bake this into an image. It is bind-mounted at run time
+# (see docker-compose.yml) so the key stays on the host.
+.env
+
+# Docker's own outputs
+output/

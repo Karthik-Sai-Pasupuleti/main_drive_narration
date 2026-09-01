@@ -12,6 +12,7 @@ src/utils/prerender.py to build the timestamped cue cache.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -30,6 +31,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 24_000     # Kokoro output sample rate (Hz)
+# When set, every synthesized line is KEPT as a WAV here instead of being
+# deleted after playback. Set by docker-compose (NARRATION_WAV_DIR) so the
+# container has a deliverable; unset on a normal host, where behaviour is
+# unchanged.
+WAV_DIR = os.environ.get("NARRATION_WAV_DIR")
 PRIORITY_NARRATION = 0   # LLM narration: dropped while a cue is speaking
 PRIORITY_CUE = 1         # scripted cue from cue_publisher.py: always wins
 
@@ -91,6 +97,12 @@ def synth_to_file(text: str, path: str | Path, voice: str = "af_heart",
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     return _write_wav(path, _render(text, voice, speed, lang_code))
+
+
+def _slug(text: str, limit: int = 40) -> str:
+    """Filesystem-safe fragment of `text`, for naming saved narration WAVs."""
+    safe = "".join(char if char.isalnum() else "_" for char in text.lower())
+    return "_".join(filter(None, safe.split("_")))[:limit] or "narration"
 
 
 def wav_duration(path: str | Path) -> float:
@@ -195,6 +207,16 @@ class TextToSpeech:
         pcm = _render(payload, self._voice, self._speed, self._lang)
         if not len(pcm):
             return
+        if WAV_DIR:                      # keep the line on disk (container mode)
+            directory = Path(WAV_DIR)
+            directory.mkdir(parents=True, exist_ok=True)
+            path = str(directory / f"{time.strftime('%Y%m%d-%H%M%S')}"
+                                   f"_{int(time.time() * 1000) % 1000:03d}"
+                                   f"_{_slug(payload)}.wav")
+            _write_wav(path, pcm)
+            logger.info("saved narration WAV: %s", path)
+            self._aplay(path)
+            return
         with NamedTemporaryFile(suffix=".wav", delete=False) as handle:
             path = handle.name
         try:
@@ -204,8 +226,17 @@ class TextToSpeech:
             Path(path).unlink(missing_ok=True)
 
     def _aplay(self, path: str) -> None:
-        """Play a WAV with aplay, stopping early if preempted or closed."""
-        with subprocess.Popen(["aplay", "-q", path]) as self._proc:
+        """Play a WAV with aplay, stopping early if preempted or closed.
+
+        No-ops when aplay is missing or there is no audio device (a container),
+        so a saved WAV is still the deliverable.
+        """
+        try:
+            proc = subprocess.Popen(["aplay", "-q", path])
+        except (FileNotFoundError, OSError) as exc:
+            logger.debug("no audio playback available (%s)", exc)
+            return
+        with proc as self._proc:
             while self._proc.poll() is None:
                 with self._cond:
                     preempted = self._pending is not None or self._closed

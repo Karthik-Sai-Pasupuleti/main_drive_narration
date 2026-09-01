@@ -109,7 +109,77 @@ Here is exactly what happens when you launch the system:
 
 ---
 
-## 4. Summary & Key Takeaways.
+## 4. Run in Docker (no local ROS 2, RViz, Ollama or Python setup)
+
+Everything the pipeline needs is in the image: ROS 2 Humble, RViz, the Autoware
+message packages, a virtual X display (RViz has to render - `vision.py`
+screenshots its window), and Kokoro TTS with its weights baked in.
+
+**The rosbag is not in the image.** It stays on the host and is bind-mounted
+read-only, so you need your own copy.
+
+### First-time setup
+
+```bash
+cp .env.example .env                  # empty is fine; action pipeline is ollama-only
+export BAG_PATH=/path/to/rosbag2_2026_08_06-16_20_58   # folder with metadata.yaml
+
+docker compose build                  # ~40 min, once
+docker compose up -d
+docker compose exec ollama ollama pull gemma4:latest   # 9.6 GB, once
+```
+
+### Running the demo
+
+Same two terminals as the host workflow, just prefixed:
+
+```bash
+# Terminal 1: bag + RViz + HUD overlays
+docker compose exec narration bash -lc \
+  'printf "\n" | ./launch/action_pipeline/run_demo.sh'
+
+# Terminal 2: narration engine
+docker compose exec narration ./launch/action_pipeline/narration.sh
+```
+
+- **Watch RViz:** <http://localhost:6080/vnc.html> (the virtual display, in a browser)
+- **Audio out:** `./output/audio/*.wav` - one WAV per narration line, plus the
+  scripted cues in `./cache/audio/`
+
+### Notes
+
+- `BAG_PATH` must be the directory containing `metadata.yaml`, not the `.mcap`
+  file and not its parent. It must be the **planner** bag (the one with the
+  `/api/planning/*` factor topics) - camera-only HMI bags leave the HUD blank
+  and nothing triggers a narration.
+- Pull the model your config actually names. `src/configs/action_pipeline.toml`
+  currently uses `gemma4:latest` (9.6 GB); the multi-agent config needs
+  `gemma4:12b` and `gemma4:31b` as well. A missing model fails at the first
+  event with `model '...' not found (status code: 404)`.
+- **CPU inference is slow.** For a quick smoke test on a smaller model,
+  override it without editing the config:
+  `docker compose exec narration ./launch/action_pipeline/narration.sh --model qwen2.5vl:3b`
+  (verified in-container: 6.4 s per event, vs 20.3 s for `gemma4:latest`).
+  For a demo that keeps up with
+  the drive, uncomment the `deploy:` GPU block in `docker-compose.yml` and
+  install the NVIDIA Container Toolkit on the host.
+- WAV saving is driven by `NARRATION_WAV_DIR`, set only in the container. On a
+  normal host `tts.py` behaves exactly as before and keeps nothing.
+- `uv` is deliberately absent from the image: `narration.sh` prefers
+  `uv run python`, which would build a venv without `rclpy`.
+
+### Useful commands
+
+| Command | Does what |
+| --- | --- |
+| `docker compose logs -f narration` | Follow the container output |
+| `docker compose exec narration bash` | Shell inside the container |
+| `docker compose down` | Stop; keeps the image and the model volume |
+| `docker compose build --no-cache` | Rebuild ignoring cached layers |
+
+---
+
+## 5. Summary & Key Takeaways.
 - **Config-Driven:** Everything (models, providers, prompts, capture windows) is defined in TOML files under `src/configs/`. You can change models without touching Python code.
 - **Robust Overlay Clocking:** HUD nodes use `ClockType.SYSTEM_TIME` (wall time) instead of sim time so looping rosbags don't cause RViz text overlays to freeze.
 - **Verification & Grounding:** Ground-truth driving actions are enforced via strict system prompts so the VLM can never hallucinate a different maneuver than what the vehicle is actually doing.

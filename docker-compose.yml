@@ -1,0 +1,75 @@
+# main_drive_narration - containerized demo.
+#
+#   export BAG_PATH=/path/to/rosbag2_2026_08_06-16_20_58   # folder with metadata.yaml
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec ollama ollama pull qwen2.5vl:3b
+#
+#   # terminal 1
+#   docker compose exec narration bash -lc 'printf "\n" | ./launch/action_pipeline/run_demo.sh'
+#   # terminal 2
+#   docker compose exec narration ./launch/action_pipeline/narration.sh
+#
+#   Watch RViz at http://localhost:6080/vnc.html ; WAVs appear in ./output/audio/
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: narration_ollama
+    volumes:
+      # Named volume: the 3.2 GB model is pulled once and survives rebuilds.
+      - ollama_models:/root/.ollama
+    # No port published on purpose: the narration container reaches this over
+    # the compose network as http://ollama:11434, and publishing 11434 would
+    # collide with a host Ollama that is already running. Uncomment only if you
+    # want to poke the container's Ollama from the host.
+    # ports:
+    #   - "11435:11434"
+    restart: unless-stopped
+    # --- NVIDIA GPU: uncomment for usable inference speed -------------------
+    # On CPU expect 10-30 s per frame; on GPU it keeps up with the drive.
+    # Requires the NVIDIA Container Toolkit on the host.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  narration:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: narration
+    depends_on:
+      - ollama
+    ports:
+      - "6080:6080"   # noVNC - watch RViz in any browser
+      - "5900:5900"   # raw VNC - optional, for a native client
+    environment:
+      BAG: /data/bag                         # run_demo.sh reads BAG=${BAG:-...}
+      DISPLAY: ":99"                         # the Xvfb screen, not a real monitor
+      OLLAMA_URL: http://ollama:11434        # narration.sh skips `ollama serve`
+      OLLAMA_HOST: http://ollama:11434       # langchain-ollama reads this
+      NARRATION_WAV_DIR: /app/output/audio   # tts.py keeps every line as a WAV
+      ROS_DOMAIN_ID: "0"
+    volumes:
+      # The rosbag stays on the host. Read-only so playback cannot damage it.
+      # ":?" makes compose refuse to start with a clear message when unset,
+      # instead of mounting nothing and producing a confusing ROS error.
+      - ${BAG_PATH:?set BAG_PATH to the rosbag folder containing metadata.yaml}:/data/bag:ro
+      # How the WAVs, CSVs and MLflow runs get back to the host.
+      - ./output:/app/output
+      # Cue WAVs built by prerender.py, kept across restarts.
+      - ./cache:/app/cache
+      # API keys stay on the host. Only needed for provider = "openai" agents.
+      - ./.env:/app/.env:ro
+    # ROS 2's DDS passes messages through shared memory. Docker's 64 MB default
+    # makes node discovery crawl and eventually stall.
+    shm_size: "2gb"
+    stdin_open: true
+    tty: true
+
+volumes:
+  ollama_models:
