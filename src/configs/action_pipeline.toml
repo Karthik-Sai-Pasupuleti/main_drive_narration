@@ -7,7 +7,7 @@ window = "narration_chase"   # RViz window (xwininfo) grabbed per event
 
 [narration]
 provider = "ollama"          # local only - no API keys anywhere in this pipeline
-model = "qwen2.5vl:3b"       # vision=true needs a VLM; minicpm-v4.5 is the heavier option
+model = "gemma4:latest"      # 3/3 valid, 3.84s in eval/action_eval.csv (:12b/:31b worse)
 temperature = 0.5
 vision = true
 prompt = "action_narration/actions_promt.toml"
