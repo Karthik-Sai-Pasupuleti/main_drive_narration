@@ -1,0 +1,26 @@
+{
+  "_comment": "Layer 2 event source: the three publisher nodes of the 120 s drive. 'at' is drive time in seconds, 'source' selects the layer-3 prompt slot (see layers/layer3_subscriber.py SLOTS).",
+  "events": [
+    {
+      "node": "ros_node_1",
+      "source": "infrapole",
+      "topic": "/infrastructure/reports",
+      "at": 30,
+      "message": "We are slowing down because we have received information from the infrastructure pole that an occluded pedestrian is crossing ahead of the parked van"
+    },
+    {
+      "node": "ros_node_2",
+      "source": "drone",
+      "topic": "/drone/reports",
+      "at": 60,
+      "message": "We are slowing down because we have received information from the drone that there is a crash ahead of the road"
+    },
+    {
+      "node": "ros_node_3",
+      "source": "robot",
+      "topic": "/robot/reports",
+      "at": 90,
+      "message": "We are shifting to the left because we have received information from the robot that there is a construction zone eighty metres ahead with the right lane closed"
+    }
+  ]
+}

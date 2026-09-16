@@ -1,0 +1,38 @@
+# src2 - the three-layer narration demo that runs without a rosbag.
+# Run: python src2/run_demo.py --config src2/config/pipeline.toml
+# Every relative path below is resolved against src2/.
+
+[timeline]
+duration_s = 120                      # length of the scripted drive
+speed = 1.0                           # clock multiplier (--speed 10 replays it in 12 s)
+turns = "config/dummy_turns.json"     # layer 1 events (turn detection)
+events = "config/dummy_events.json"   # layer 2 events (the 3 publisher nodes)
+
+[output]
+dir = "../output/src2"                # one timestamped run folder per run
+
+[capture]
+window = "narration_chase"            # RViz window grabbed for the layer-1 VLM
+fallback_frames = "../eval/turn_captures"   # used when no RViz / $DISPLAY is available
+
+[audio]
+voice = "af_heart"                    # Kokoro voice (ignored by the espeak-ng fallback)
+speed = 1.0
+espeak_rate = 160                     # words per minute for the espeak-ng fallback
+
+# Layer 1: turn detection -> RViz frame -> VLM commentary.
+[layer1]
+provider = "ollama"                   # local only; no API key needed
+model = "gemma4:latest"               # vision model (same one the action pipeline uses)
+temperature = 0.5
+vision = true
+prompt = "config/prompts/layer1_turn_prompt.toml"
+# num_predict = 256                   # cap the reply for a thinking model
+
+# Layer 3: the single LLM subscriber over the three publisher nodes.
+[layer3]
+provider = "ollama"                   # switch to provider="openai", model="gpt-4o-mini" for OpenAI
+model = "gemma4:latest"
+temperature = 0.4
+vision = false
+prompt = "config/prompts/layer3_subscriber_prompt.toml"

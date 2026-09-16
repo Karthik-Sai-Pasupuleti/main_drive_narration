@@ -1,0 +1,9 @@
+{
+  "_comment": "Layer 1 event source: the turn detections of the 120 s drive. On the vehicle these come from the decision HUD; here they are scripted so the pipeline needs no rosbag. 'at' is drive time in seconds.",
+  "turns": [
+    { "at": 15,  "direction": "left",  "phase": "upcoming" },
+    { "at": 45,  "direction": "right", "phase": "upcoming" },
+    { "at": 75,  "direction": "left",  "phase": "upcoming" },
+    { "at": 105, "direction": "right", "phase": "upcoming" }
+  ]
+}
