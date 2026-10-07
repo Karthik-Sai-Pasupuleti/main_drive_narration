@@ -15,6 +15,7 @@ cd "$(dirname "$0")/.."   # project root
 BAG="${BAG:-$HOME/Downloads/rosbag2_2026_08_06-16_20_58}"
 VIEW="${VIEW:-bev}"
 PATH_TOPIC="/planning/scenario_planning/lane_driving/behavior_planning/path"
+FALLBACK_TOPIC="/tf"   # every bag has this; used when PATH_TOPIC was not recorded
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 # clean snap/VS Code env pollution that crashes rviz2/Qt
@@ -32,6 +33,15 @@ if [ ! -e "$BAG/metadata.yaml" ]; then
   exit 1
 fi
 echo "Bag playback only: ROS_DOMAIN_ID=$ROS_DOMAIN_ID | bag=$BAG | view=$VIEW"
+
+# Wait on a topic this bag actually contains. Not every recording has the
+# planning path - the 2026_08_20 bag does not - and waiting on an absent topic
+# just burns the full 90s timeout before RViz ever starts.
+WAIT_TOPIC="$PATH_TOPIC"
+if ! grep -q "name: ${PATH_TOPIC}$" "$BAG/metadata.yaml"; then
+  WAIT_TOPIC="$FALLBACK_TOPIC"
+  echo "NOTE: bag does not record '$PATH_TOPIC'; waiting on '$WAIT_TOPIC' instead."
+fi
 
 pkill -x rviz2 2>/dev/null
 pkill -f "[r]os2 bag play" 2>/dev/null
@@ -55,14 +65,19 @@ RSP_PID=$!
 
 trap 'kill $BAG_PID $RSP_PID $BEV_PID $PERSP_PID 2>/dev/null' EXIT
 
-echo "Waiting for the bag player to advertise planning topics..."
+echo "Waiting for the bag player to advertise '$WAIT_TOPIC'..."
+READY=0
 for i in $(seq 1 90); do
-  if ros2 topic info "$PATH_TOPIC" 2>/dev/null | grep -q "Publisher count: [1-9]"; then
-    echo "Planning topics are live (after ${i}s). Starting RViz."
+  if ros2 topic info "$WAIT_TOPIC" 2>/dev/null | grep -q "Publisher count: [1-9]"; then
+    echo "Topics are live (after ${i}s). Starting RViz."
+    READY=1
     break
   fi
   sleep 1
 done
+if [ "$READY" = "0" ]; then
+  echo "WARN: '$WAIT_TOPIC' never appeared after 90s - starting RViz anyway."
+fi
 sleep 2
 
 BEV_PID=""; PERSP_PID=""
