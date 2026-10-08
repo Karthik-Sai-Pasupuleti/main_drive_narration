@@ -15,3 +15,4 @@ wheels/
 # MLflow eval artifacts
 mlruns/
 eval_results/
+mlflow.db

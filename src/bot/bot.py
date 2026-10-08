@@ -15,11 +15,10 @@ _BLANK_IMAGE = ("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP/////////////////////////////
 
 class Action_Based_Narration_Input(BaseModel):
     """Text inputs for the single-agent narration model (image passed separately).
-    Fields match the actions_promt.toml placeholders."""
+    Fields match the actions_promt.toml placeholders. Covers turns only - hazard
+    reports come from the mobile-pole trigger (Hazard_Narration_Input) instead."""
 
     driving_action: str = Field(description="the ground-truth driving action")
-    drone_data: str = Field(default="none", description="latest drone report")
-    infrastructure_data: str = Field(default="none", description="latest infrastructure report")
     action_memory: str = Field(default="(no readings)", description="recent HUD actions")
     narration_memory: str = Field(default="(none yet)", description="previous narrations")
 
@@ -28,50 +27,33 @@ class Action_Based_Narration_Output(BaseModel):
 
     narration: str = Field(description="one warm, present-tense, first-person-plural sentence "
                             "for the passenger, at most 14 words, grounded in the scene")
-    
 
-## multi-agent narration input and output classes
 
-class Multi_Agent_Narration_Input(BaseModel):
-    """Text inputs for the multi-agent narration model (the two scene
-    descriptions come from the vision agents). Fields match the
-    narration_prompt.toml placeholders."""
+## mobile-pole hazard pipeline: image-caption / detections-to-text input and
+## output classes, shared by main.py (live) and eval_hazard_pipeline.py (offline)
+
+class Scene_Caption_Input(BaseModel):
+    """No text fields - the image is passed via LLMBot.invoke(image=...)."""
+
+
+class Scene_Caption_Output(BaseModel):
+    """Part A stage 1: caption the image into a factual scene_description."""
+
+    scene_description: str = Field(description="factual description of the image")
+
+
+class Hazard_Narration_Input(BaseModel):
+    """Shared stage-2 input for both hazard-pipeline parts: a scene_description
+    (from either a VLM caption or detections_to_text()) + the usual context.
+    Fields match hazard_context_prompt.toml's placeholders. The mobile pole IS
+    the infrastructure source here - there is no separate drone/infra report."""
 
     driving_action: str = Field(description="the ground-truth driving action")
-    road_geometry_description: str = Field(description="road-geometry agent output")
-    obstacles_description: str = Field(description="obstacles agent output")
-    drone_data: str = Field(default="none", description="latest drone report")
-    infrastructure_data: str = Field(default="none", description="latest infrastructure report")
+    scene_description: str = Field(description="factual scene text (from either part)")
     action_memory: str = Field(default="(no readings)", description="recent HUD actions")
     narration_memory: str = Field(default="(none yet)", description="previous narrations")
 
-class Road_Geometry_Input(BaseModel):
-    """Bev image input for the model: structured narration reply the model must return as JSON."""
 
-    Bev_image: str = Field(description="Base64 encoded BEV image of the road geometry")
-
-class Road_Geometry_Output(BaseModel):
-    """Bev image output for the model: structured narration reply the model must return as JSON."""
-
-    road_geometry: str = Field(description="A short description of the road geometry seen in the BEV image")
-
-class Obstacles_description_Input(BaseModel):
-    """Front perspective image input for the model: structured narration reply the model must return as JSON."""
-
-    front_perspective_image: str = Field(description="Base64 encoded front view image of the obstacles")
-
-class Obstacles_description_Output(BaseModel):
-    """Front perspective image output for the model: structured narration reply the model must return as JSON."""
-
-    obstacles_description: str = Field(description="A short description of the obstacles seen in the front view image")
-
-class Multi_Agent_Narration_Output(BaseModel):
-    """Structured narration reply the model must return as JSON."""
-
-    Narration: str = Field(description="one warm, present-tense, first-person-plural sentence "
-                            "for the passenger, at most 14 words, grounded in the scene")
-
-    
 class AgentConfig(BaseModel):
     """One agent's model settings (from the pipeline config's section)."""
 

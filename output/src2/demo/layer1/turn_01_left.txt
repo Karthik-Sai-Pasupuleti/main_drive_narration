@@ -1,0 +1,13 @@
+layer: 1 - turn detection -> VLM commentary
+drive_time_s: 15.0
+driving_action: TURN LEFT (intersection)
+turn_phase: upcoming
+frame: turn1_20260727-213818_left_upcoming_front.jpg
+model: ollama/gemma4:latest
+inference_s: 2.88
+
+SCENE (as the model sees it)
+The view shows a cornering path leading into an open four-way intersection.
+
+NARRATION
+We are turning left now as we enter the wide intersection ahead.

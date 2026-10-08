@@ -1,0 +1,13 @@
+layer: 1 - turn detection -> VLM commentary
+drive_time_s: 45.0
+driving_action: TURN RIGHT (intersection)
+turn_phase: upcoming
+frame: turn2_20260727-213850_left_upcoming_front.jpg
+model: ollama/gemma4:latest
+inference_s: 2.88
+
+SCENE (as the model sees it)
+A T-junction where the road continues straight and also turns right, with clear lanes visible.
+
+NARRATION
+We are turning left at this upcoming junction into the available lane.

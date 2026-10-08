@@ -1,0 +1,44 @@
+{
+  "sample_rate": 24000,
+  "cues": {
+    "infra/signal_out": {
+      "file": "infra.json",
+      "source": "infrastructure",
+      "id": "signal_out",
+      "at": 0.5,
+      "text": "We are slowing down because we have received information from the infrastructure pole that an occluded pedestrian is crossing ahead of the parked van",
+      "voice": "af_heart",
+      "speed": 1.0,
+      "lang_code": "a",
+      "hash": "92ddccc5",
+      "duration_s": 8.88,
+      "wav": "cache/audio/infra/signal_out_92ddccc5.wav"
+    },
+    "drone/occluded_pedestrian": {
+      "file": "drone.json",
+      "source": "drone",
+      "id": "occluded_pedestrian",
+      "at": 11.5,
+      "text": "We are slowing down because we have received information from the drone that there is a crash ahead of the road",
+      "voice": "af_heart",
+      "speed": 1.0,
+      "lang_code": "a",
+      "hash": "e267283c",
+      "duration_s": 6.22,
+      "wav": "cache/audio/drone/occluded_pedestrian_e267283c.wav"
+    },
+    "construction_zone/right_lane_closed": {
+      "file": "construction_zone.json",
+      "source": "infrastructure",
+      "id": "right_lane_closed",
+      "at": 21.0,
+      "text": "We are shifting to the left because we have received information from the robot that there is a construction zone eighty metres ahead with the right lane closed",
+      "voice": "af_heart",
+      "speed": 1.0,
+      "lang_code": "a",
+      "hash": "7fac2ec2",
+      "duration_s": 9.45,
+      "wav": "cache/audio/construction_zone/right_lane_closed_7fac2ec2.wav"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+layer: 3 - single LLM subscriber over the 3 publisher nodes
+drive_time_s: 30.0
+node: ros_node_1
+source: infrapole
+topic: /infrastructure/reports
+model: ollama/gemma4:latest
+inference_s: 2.20
+
+PUBLISHED MESSAGE (ros_node_1 / infrapole)
+We are slowing down because we have received information from the infrastructure pole that an occluded pedestrian is crossing ahead of the parked van
+
+SUBSCRIBER SLOTS AT THIS MOMENT
+- infrapole_report: We are slowing down because we have received information from the infrastructure pole that an occluded pedestrian is crossing ahead of the parked van
+- drone_report: (not received yet)
+- robot_report: (not received yet)
+
+REFINED CONTEXT
+The infrastructure pole reports an occluded pedestrian crossing ahead of the parked van, so the vehicle is slowing down.
+
+NARRATION
+We are slowing down - the infrastructure pole reports a hidden pedestrian crossing ahead of the parked van.

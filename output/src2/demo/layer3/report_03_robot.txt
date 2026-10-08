@@ -1,0 +1,21 @@
+layer: 3 - single LLM subscriber over the 3 publisher nodes
+drive_time_s: 90.0
+node: ros_node_3
+source: robot
+topic: /robot/reports
+model: ollama/gemma4:latest
+inference_s: 2.80
+
+PUBLISHED MESSAGE (ros_node_3 / robot)
+We are shifting to the left because we have received information from the robot that there is a construction zone eighty metres ahead with the right lane closed
+
+SUBSCRIBER SLOTS AT THIS MOMENT
+- infrapole_report: We are slowing down because we have received information from the infrastructure pole that an occluded pedestrian is crossing ahead of the parked van
+- drone_report: We are slowing down because we have received information from the drone that there is a crash ahead of the road
+- robot_report: We are shifting to the left because we have received information from the robot that there is a construction zone eighty metres ahead with the right lane closed
+
+REFINED CONTEXT
+The infrastructure pole reported an occluded pedestrian, followed by the drone reporting a crash ahead; finally, the robot reports shifting left due to a construction zone with the right lane closed.
+
+NARRATION
+We are shifting left - the robot reports a construction zone eighty metres ahead with the right lane closed.

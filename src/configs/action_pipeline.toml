@@ -2,12 +2,31 @@
 # Run: python main.py --config src/configs/action_pipeline.toml
 pipeline = "action"
 
-[capture]
-window = "narration_chase"   # RViz window (xwininfo) grabbed per event
-
 [narration]
 provider = "openai"          # "ollama" (local) or "openai" (needs OPENAI_API_KEY)
 model = "gpt-4o-mini"
 temperature = 0.5
-vision = true
+vision = false               # text-only: driving_action + HUD/narration memory, no image
 prompt = "action_narration/actions_promt.toml"
+
+# Mobile-pole infrastructure hazard trigger (2nd trigger, alongside turns).
+# See eval_hazard_pipeline.py for the Part A (vlm) vs Part B (detections)
+# latency comparison this is based on.
+[mobile_pole]
+objects_topic = "/mobile_pole/axis_rgb_6_42/autoware_objects_3d"
+image_topic = "/mobile_pole/axis_rgb_6_42/image_visualization"  # only used by method = "vlm"
+method = "detections"            # "detections" (fast, no caption call) or "vlm"
+hazard_classes = ["pedestrian"]  # autoware_perception_msgs/ObjectClassification names
+min_confidence = 0.5
+cooldown_s = 15.0                 # don't re-fire more often than this
+
+[mobile_pole.context]            # shared stage-2: scene_description + context -> narration
+provider = "ollama"
+model = "phi4-mini"
+prompt = "action_narration/hazard_context_prompt.toml"
+
+[mobile_pole.caption]            # Part A stage-1 only; unused when method = "detections"
+provider = "ollama"
+model = "gemma4:latest"
+vision = true
+prompt = "action_narration/vlm_caption_prompt.toml"

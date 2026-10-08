@@ -18,3 +18,5 @@ dependencies = [
 [project.optional-dependencies]
 # High-quality neural TTS; the pipeline falls back to espeak-ng / silent without it.
 tts = ["kokoro"]
+# Reading .mcap rosbags offline (eval_hazard_pipeline.py), no ROS runtime needed.
+eval = ["mcap-ros2-support"]

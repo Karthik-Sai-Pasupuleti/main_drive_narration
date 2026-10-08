@@ -1,28 +1,26 @@
 #!/bin/bash
 # narration.sh - run the drive-narration node (main.py).
 #
-# Subscribes to the RViz HUD (/hud/decision) plus the drone/infrastructure report
-# topics, reasons each event with the Ollama model configured in
-# src/configs/actions_promt.toml, speaks it (Kokoro/espeak TTS) and logs it.
-# Run run_live.sh (RViz + HUD overlays) in another terminal first.
+# Subscribes to /hud/decision (for turns) plus the mobile-pole infrastructure
+# hazard detections topic, reasons each event with the Ollama model configured
+# in src/configs/action_pipeline.toml, speaks it (Kokoro/espeak TTS) and logs
+# it. Run run_live.sh (HUD overlays) in another terminal first. No display/RViz
+# needed - turn narration is text-only, and mobile-pole's vlm method (if
+# enabled) reads the pole's own camera topic directly, not a screenshot.
 #
 # Usage (from anywhere; the script cd's to the project root):
-#   ./launch/run_live.sh          # terminal 1: RViz + HUD overlays
-#   ./launch/narration.sh         # terminal 2: this script
+#   ./launch/action_pipeline/run_live.sh          # terminal 1: HUD overlays
+#   ./launch/action_pipeline/narration.sh         # terminal 2: this script
 #
-#   ./launch/narration.sh --no-tts                 # extra flags -> main.py
-#   ROS_DOMAIN_ID=5 ./launch/narration.sh          # match run_live.sh's domain
+#   ./launch/action_pipeline/narration.sh --no-tts        # extra flags -> main.py
+#   ROS_DOMAIN_ID=5 ./launch/action_pipeline/narration.sh # match run_live.sh's domain
 cd "$(dirname "$0")/../.."   # project root
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"   # same domain as run_live.sh
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
-# The narrator grabs the RViz frame for the VLM, so it needs the same X display
-# RViz renders on (run_live.sh / run_demo.sh use :1).
-export DISPLAY="${DISPLAY:-:1}"
 
-# --- clean environment (snap/VS Code env pollution breaks ROS/Qt) ---
-unset GTK_PATH LOCPATH GIO_MODULE_DIR GTK_EXE_PREFIX GTK_IM_MODULE_FILE
-unset GSETTINGS_SCHEMA_DIR GIO_LAUNCHED_DESKTOP_FILE GTK_IM_MODULE
+# --- clean environment (VS Code injects an LD_LIBRARY_PATH that can break
+#     rclpy's compiled extensions) ---
 unset LD_LIBRARY_PATH LD_PRELOAD
 
 source /opt/ros/humble/setup.bash
@@ -47,17 +45,16 @@ fi
 pkill -f "[p]ython.*main.py" 2>/dev/null   # bracket avoids matching this pkill
 sleep 1
 
-echo "Narration: config=src/configs/action_pipeline.toml | hud=/hud/decision | drone=/drone/reports | infra=/infrastructure/reports"
+echo "Narration: config=src/configs/action_pipeline.toml | hud=/hud/decision | mobile_pole=/mobile_pole/axis_rgb_6_42/autoware_objects_3d"
 export OLLAMA_HOST="$OLLAMA_URL"
 
-# --- python: prefer the demo_speech_agent venv (has kokoro for the neural voice,
-#     + langchain/ollama); this project's own env has no kokoro, so uv run would
-#     fall back to the robotic espeak-ng voice. ---
-PY="../demo_speech_agent/.venv/bin/python"
+# --- python: this project's own .venv has kokoro + langchain/ollama installed
+#     (`uv sync --extra tts`); fall back to uv run / system python3 if absent. ---
+PY=".venv/bin/python3"
 if [ -x "$PY" ]; then
-  echo "Using demo_speech_agent venv python (kokoro TTS)."
+  echo "Using project .venv python (kokoro TTS if installed, else espeak-ng)."
 elif command -v uv >/dev/null 2>&1; then
-  echo "WARN: demo_speech_agent venv not found; using 'uv run' (no kokoro -> espeak voice)."
+  echo "WARN: .venv not found; using 'uv run' instead."
   PY="uv run python"
 else
   PY="python3"

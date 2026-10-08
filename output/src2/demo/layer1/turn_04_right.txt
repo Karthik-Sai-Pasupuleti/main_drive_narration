@@ -1,0 +1,13 @@
+layer: 1 - turn detection -> VLM commentary
+drive_time_s: 105.0
+driving_action: TURN RIGHT (intersection)
+turn_phase: upcoming
+frame: turn1_20260727-213818_left_upcoming_front.jpg
+model: ollama/gemma4:latest
+inference_s: 2.63
+
+SCENE (as the model sees it)
+a curved, open four-way intersection where the road continues to curve right
+
+NARRATION
+We are turning right as we follow the curving path through this intersection.
