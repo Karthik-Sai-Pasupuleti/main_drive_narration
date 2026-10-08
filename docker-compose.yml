@@ -1,0 +1,58 @@
+# main_drive_narration - containerized demo.
+#
+#   export BAG_PATH=/path/to/rosbag2_2026_05_28-13_40_16   # folder with metadata.yaml
+#   cp .env.example .env && edit in OPENAI_API_KEY          # narration's default provider
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec ollama ollama pull phi4-mini        # mobile_pole.context's model
+#
+#   # terminal 1
+#   docker compose exec narration bash -lc 'printf "\n" | ./launch/action_pipeline/run_demo.sh'
+#   # terminal 2
+#   docker compose exec narration ./launch/action_pipeline/narration.sh
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: narration_ollama
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    # --- NVIDIA GPU: uncomment for usable inference speed -------------------
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  narration:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: narration
+    depends_on:
+      - ollama
+    environment:
+      BAG: /data/bag                         # run_demo.sh reads BAG=${BAG:-...}
+      OLLAMA_URL: http://ollama:11434        # narration.sh skips `ollama serve`
+      OLLAMA_HOST: http://ollama:11434       # langchain-ollama reads this
+      ROS_DOMAIN_ID: "0"
+    volumes:
+      # The rosbag stays on the host. Read-only so playback cannot damage it.
+      - ${BAG_PATH:?set BAG_PATH to the rosbag folder containing metadata.yaml}:/data/bag:ro
+      # --csv output and mlflow's local run store, kept across restarts.
+      - ./output:/app/output
+      - ./mlruns:/app/mlruns
+      # API keys stay on the host - action_pipeline.toml's narration agent
+      # defaults to provider = "openai" (gpt-4o-mini), which needs this.
+      - ./.env:/app/.env:ro
+    # ROS 2's DDS passes messages through shared memory. Docker's 64 MB default
+    # makes node discovery crawl and eventually stall.
+    shm_size: "2gb"
+    stdin_open: true
+    tty: true
+
+volumes:
+  ollama_models:

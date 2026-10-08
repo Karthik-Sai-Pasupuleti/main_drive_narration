@@ -1,0 +1,27 @@
+# Build context hygiene: without this, Docker copies the whole repo
+# (including local venvs and generated artifacts) before the first RUN starts.
+
+# Python leftovers
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Experiment data - regenerated inside the container anyway
+mlruns/
+mlflow.db
+eval_results/
+cache/
+output/
+
+# History
+.git/
+.gitignore
+
+# Secrets: NEVER bake this into an image. It is bind-mounted at run time
+# (see docker-compose.yml) so the key stays on the host.
+.env
