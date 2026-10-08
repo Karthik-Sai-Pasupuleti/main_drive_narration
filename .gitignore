@@ -16,3 +16,6 @@ wheels/
 mlruns/
 eval_results/
 mlflow.db
+
+# cache files
+cache/
