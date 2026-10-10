@@ -3,9 +3,9 @@
 pipeline = "action"
 
 [narration]
-provider = "openai"          # "ollama" (local) or "openai" (needs OPENAI_API_KEY)
-model = "gpt-4o-mini"
-temperature = 0.5
+provider = "ollama"          # "ollama" (local) or "openai" (needs OPENAI_API_KEY)
+model = "phi4-mini"
+temperature = 0.1
 vision = false               # text-only: driving_action + HUD/narration memory, no image
 prompt = "action_narration/actions_promt.toml"
 
@@ -15,18 +15,53 @@ prompt = "action_narration/actions_promt.toml"
 [mobile_pole]
 objects_topic = "/mobile_pole/axis_rgb_6_42/autoware_objects_3d"
 image_topic = "/mobile_pole/axis_rgb_6_42/image_visualization"  # only used by method = "vlm"
-method = "detections"            # "detections" (fast, no caption call) or "vlm"
+method = "vlm"                   # "detections" (fast, no caption call) or "vlm"
 hazard_classes = ["pedestrian"]  # autoware_perception_msgs/ObjectClassification names
 min_confidence = 0.5
 cooldown_s = 15.0                 # don't re-fire more often than this
 
+# Distance gate: only narrate once the nearest qualifying hazard crosses INTO
+# this many meters of the ego vehicle - not while it's still farther out, and
+# not again for the same sighting once it's already been narrated. Ego
+# position comes from the TF tree (map_frame -> ego_frame).
+trigger_distance_m = 10.0
+map_frame = "map"
+ego_frame = "base_link"
+
 [mobile_pole.context]            # shared stage-2: scene_description + context -> narration
 provider = "ollama"
 model = "phi4-mini"
+temperature = 0.1
 prompt = "action_narration/hazard_context_prompt.toml"
 
 [mobile_pole.caption]            # Part A stage-1 only; unused when method = "detections"
 provider = "ollama"
 model = "gemma4:latest"
+temperature = 0.1
+vision = true
+prompt = "action_narration/vlm_caption_prompt.toml"
+
+# Robot's own camera/detector trigger (3rd trigger, alongside turns and
+# mobile_pole). Always vlm: /robot/detections (vision_msgs/Detection2DArray) is
+# 2D-pixel-space only (no real-world position), so it's used purely as the
+# fire/cooldown signal, not turned into scene-description text - the scene
+# description always comes from captioning the detector's own annotated frame.
+[robot]
+objects_topic = "/robot/detections"
+image_topic = "/robot/image_annotated"   # already has boxes/labels drawn in
+hazard_classes = ["person"]              # vision_msgs ObjectHypothesis.class_id values
+min_confidence = 0.5
+cooldown_s = 15.0                        # don't re-fire more often than this
+
+[robot.context]                  # scene_description + context -> narration
+provider = "ollama"
+model = "phi4-mini"
+temperature = 0.1
+prompt = "action_narration/robot_context_prompt.toml"
+
+[robot.caption]                  # image -> factual scene_description
+provider = "ollama"
+model = "gemma4:latest"
+temperature = 0.1
 vision = true
 prompt = "action_narration/vlm_caption_prompt.toml"

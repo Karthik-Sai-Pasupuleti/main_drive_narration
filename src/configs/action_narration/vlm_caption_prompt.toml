@@ -1,9 +1,7 @@
 # Part A, stage 1: caption the image into text (no driving-action/context yet).
 # This is the ONLY stage that differs structurally from Part B (which gets its
 # stage-1 text for free from detections_to_text(), no model call).
-model = "gpt-4o-mini"
-temperature = 0.3
-
+# Model/temperature are set in action_pipeline.toml's [*.caption] sections, not here.
 system_prompt = """
 You are the perception front-end of an autonomous-vehicle narration system. You
 are given an image from a camera (vehicle-mounted or roadside infrastructure).

@@ -63,6 +63,9 @@ class AgentConfig(BaseModel):
     num_predict: int | None = Field(default=None, description="max tokens to generate")
     prompt: str = Field(description="path to the prompt TOML (system_prompt + user_template)")
     vision: bool = Field(default=False, description="send an image to the model")
+    keep_alive: str | int | None = Field(
+        default="30m", description="ollama-only: how long to keep the model loaded in "
+        "VRAM after a call (e.g. '30m', or -1 for indefinitely); ignored by openai")
 
 
 class PromptConfig(BaseModel):
@@ -81,7 +84,7 @@ def _make_model(cfg: AgentConfig):
         return ChatOpenAI(model=cfg.model, temperature=cfg.temperature,
                           max_tokens=cfg.num_predict)
     return ChatOllama(model=cfg.model, temperature=cfg.temperature,
-                      num_predict=cfg.num_predict)
+                      num_predict=cfg.num_predict, keep_alive=cfg.keep_alive)
 
 
 class LLMBot:

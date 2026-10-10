@@ -42,6 +42,15 @@ audio. Start Terminal 1 first and give it a few seconds to finish loading
 (Kokoro/model warm-up) before starting the bag in Terminal 2, so you don't
 miss the earliest events.
 
+**Terminal 3 (optional)** — watch the drive while the bag plays, in a
+third-person "chase cam" view behind the ego vehicle:
+```bash
+./launch/action_pipeline/view_rviz.sh
+```
+This is purely a human viewer (`rviz/front_chase_view.rviz`) — `main.py`
+itself needs no display, so skip this terminal entirely if you only care
+about the narration.
+
 ## Live usage (no bag)
 
 `main.py` subscribes to the raw topics directly, so against a real live stack

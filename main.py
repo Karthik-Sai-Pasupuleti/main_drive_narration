@@ -4,18 +4,22 @@
     python main.py --config ... --eval --events 3 --csv out.csv   # bounded, logged
 
 --eval logs every narration event (models, per-agent inference times, outputs,
-speech time) to MLflow; --csv appends the same as flat rows. --events/--timeout
-bound the run so it exits on its own (used by the per-model study loop).
+speech time) to MLflow. Every event is also appended immediately (one row per
+event, not buffered to exit) to --csv, which defaults to
+eval/narration_pipeline.csv so a plain `narration.sh` run logs without any
+extra flags; pass --csv "" to disable. --events/--timeout bound the run so it
+exits on its own (used by the per-model study loop).
 --model/--provider override the config's models. Turn narration is text-only
 (no image); the mobile-pole trigger's vlm method captions the pole's own
-camera feed instead.
+camera feed instead; the robot trigger is vlm-only and captions the robot
+camera's own /robot/image_annotated feed.
 
 This is the ONLY node the pipeline needs: it subscribes directly to the raw
-Autoware/mobile-pole topics (no factor_overlay.py/hud_relay.py relay process),
-so run_demo.sh/run_live.sh only have to get those topics flowing (bag or live
-stack) - this file owns all narration-trigger logic. Each trigger is a
-subscription + a callback that calls _enqueue() when its condition is met;
-adding a future trigger means adding one more such pair.
+Autoware/mobile-pole/robot topics (no factor_overlay.py/hud_relay.py relay
+process), so run_demo.sh/run_live.sh only have to get those topics flowing
+(bag or live stack) - this file owns all narration-trigger logic. Each trigger
+is a subscription + a callback that calls _enqueue() when its condition is
+met; adding a future trigger means adding one more such pair.
 """
 from __future__ import annotations
 
@@ -23,6 +27,8 @@ import argparse
 import base64
 import csv
 import io
+import math
+import os
 import queue
 import sys
 import threading
@@ -31,10 +37,17 @@ from collections import deque
 from pathlib import Path
 
 import rclpy
+import tf2_ros
+
+try:
+    import requests   # optional: only needed to pre-warm ollama models at startup
+except ImportError:
+    requests = None
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
+from rclpy.time import Time
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -43,6 +56,7 @@ sys.path.insert(0, str(SRC))
 from autoware_adapi_v1_msgs.msg import SteeringFactorArray         # noqa: E402
 from autoware_perception_msgs.msg import DetectedObjects          # noqa: E402
 from sensor_msgs.msg import Image as RosImage                     # noqa: E402
+from vision_msgs.msg import Detection2DArray                       # noqa: E402
 from bot.bot import (AgentConfig, LLMBot,                        # noqa: E402
                      Action_Based_Narration_Input, Action_Based_Narration_Output,
                      Scene_Caption_Input, Scene_Caption_Output, Hazard_Narration_Input)
@@ -53,8 +67,13 @@ from utils.utils import load_config, load_env                    # noqa: E402
 
 CONFIGS_DIR = SRC / "configs"
 AGENT_ROLES = ("narration",)
-CSV_FIELDS = ["pipeline", "event", "model", "driving_action", "narration",
-              "scene_description", "stage1_s", "narration_s", "total_infer_s", "speech_s"]
+DEFAULT_CSV = ROOT / "eval" / "narration_pipeline.csv"
+# Mirrors eval/hazard_pipeline.csv's columns (part/rep/model/stage timings/
+# scene_description/narration), split into stage1_model + context_model since
+# a mobile_pole event's two stages can run different models.
+CSV_FIELDS = ["part", "rep", "stage1_model", "context_model", "driving_action",
+              "stage1_s", "context_s", "speech_s", "total_s",
+              "scene_description", "narration"]
 load_env(str(ROOT / ".env"))
 
 # autoware_adapi_v1_msgs/SteeringFactor: direction / status constants.
@@ -114,6 +133,54 @@ def _timed(fn):
     return fn(), time.perf_counter() - start
 
 
+def _collect_ollama_models(cfg: dict) -> set[str]:
+    """Every distinct ollama model this run will actually call - the narration
+    agent, the mobile-pole context agent (plus its caption agent if
+    method='vlm'), and the robot context + caption agents (robot is always
+    vlm) - so we can load them all into VRAM up front instead of paying a
+    cold-load on whichever one happens to fire first."""
+    models: set[str] = set()
+    sections = [cfg.get("narration"), cfg.get("mobile_pole", {}).get("context"),
+               cfg.get("robot", {}).get("context"), cfg.get("robot", {}).get("caption")]
+    mp = cfg.get("mobile_pole")
+    if mp and mp.get("method") == "vlm":
+        sections.append(mp.get("caption"))
+    for section in sections:
+        if section and section.get("provider", "ollama") == "ollama":
+            models.add(section["model"])
+    return models
+
+
+def _warm_ollama_models(models: set[str], logger, keep_alive: str | int = "30m") -> None:
+    """Load every model in `models` into VRAM up front (one blocking HTTP call
+    each), so the first real trigger doesn't pay Ollama's cold-load time.
+    Sequential, not parallel: firing several /api/generate loads at once hits
+    a transient race in Ollama's scheduler where it evicts one of the models
+    it just loaded (reproduced during testing) - one at a time is slower in
+    total but actually leaves every model resident. Best-effort: a failed/slow
+    model just logs a warning, nothing crashes."""
+    if not models:
+        return
+    if requests is None:
+        logger.warning("mobile_pole/narration: 'requests' not installed, skipping "
+                       "ollama model warm-up (first inference will be slower)")
+        return
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    if not host.startswith("http"):
+        host = f"http://{host}"
+
+    logger.info(f"warming {len(models)} ollama model(s): {sorted(models)}")
+    for model in sorted(models):
+        start = time.perf_counter()
+        try:
+            requests.post(f"{host}/api/generate",
+                         json={"model": model, "prompt": "", "keep_alive": keep_alive},
+                         timeout=180)
+            logger.info(f"warmed ollama model '{model}' in {time.perf_counter() - start:.1f}s")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(f"failed to warm ollama model '{model}': {exc}")
+
+
 class Narrator(Node):
     """The whole action pipeline in one node. Every trigger (turn detection,
     mobile-pole hazard detections, ...) is a subscription + a callback that
@@ -122,16 +189,24 @@ class Narrator(Node):
     MLflow."""
 
     def __init__(self, cfg: dict, use_tts: bool = True, eval_mode: bool = False,
-                 experiment: str = "narration_eval") -> None:
+                 experiment: str = "narration_eval", csv_path: str | None = None) -> None:
         super().__init__("narrator")
         self.pipeline = cfg["pipeline"]
         self.eval = eval_mode
         self.event_count = 0
-        self.records: list[dict] = []   # flat per-event rows for the eval CSV
+        self.records: list[dict] = []   # in-memory copy of every row appended so far
+        self._csv_path = csv_path or None   # falsy (e.g. "") disables per-event CSV logging
+        self._part_reps: dict[str, int] = {}
         self.tts = make_tts(use_tts)
+
+        # Load every ollama model this config will use into VRAM up front, in
+        # parallel, so whichever trigger fires first doesn't pay a cold-load.
+        # No subscriptions exist yet, so nothing can be dropped while we wait.
+        _warm_ollama_models(_collect_ollama_models(cfg), self.get_logger())
 
         self.narration = LLMBot(AgentConfig(**cfg["narration"]),
                                 Action_Based_Narration_Output, CONFIGS_DIR)
+        self._narration_model = cfg["narration"]["model"]
         self._models = {r: (cfg[r].get("provider", "ollama"), cfg[r]["model"])
                         for r in AGENT_ROLES if r in cfg}
         self._memory: list[str] = []                     # spoken narration lines
@@ -154,18 +229,39 @@ class Narrator(Node):
         # Trigger 2: mobile-pole infrastructure hazard detections - optional,
         # only set up if the config has a [mobile_pole] section.
         mp = cfg.get("mobile_pole")
-        self._mp_method = None
+        self._mp_method = "vlm"
         if mp:
             self._mp_method = mp.get("method", "detections")
             self._mp_hazard_classes = set(mp.get("hazard_classes", ["pedestrian"]))
             self._mp_min_confidence = mp.get("min_confidence", 0.5)
             self._mp_cooldown_s = mp.get("cooldown_s", 15.0)
+            # A single frame with no qualifying detection doesn't mean the hazard left -
+            # detector confidence/tracking can dip for a frame while the person is still
+            # there. Only treat it as gone after this many seconds with none seen.
+            self._mp_clear_grace_s = mp.get("clear_grace_s", 3.0)
             self._mp_last_fired = 0.0
+            self._mp_active = False     # True while the current hazard is still in view
+            self._mp_clear_since: float | None = None
+
+            # Distance gate: fire exactly as the nearest qualifying hazard
+            # crosses into this range of the ego vehicle - not while it's still
+            # farther out, and not again once it's already been narrated for
+            # this sighting. Ego position comes from the TF tree (map -> the
+            # ego frame).
+            self._mp_trigger_distance_m = mp.get("trigger_distance_m", 10.0)
+            self._mp_map_frame = mp.get("map_frame", "map")
+            self._mp_ego_frame = mp.get("ego_frame", "base_link")
+            self._mp_prev_distance_m: float | None = None
+            self._tf_buffer = tf2_ros.Buffer()
+            self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+
             self._mp_context_bot = LLMBot(AgentConfig(**mp["context"]),
                                           Action_Based_Narration_Output, CONFIGS_DIR)
+            self._mp_context_model = mp["context"]["model"]
             if self._mp_method == "vlm":
                 self._mp_caption_bot = LLMBot(AgentConfig(**mp["caption"]),
                                               Scene_Caption_Output, CONFIGS_DIR)
+                self._mp_caption_model = mp["caption"]["model"]
                 self._mp_latest_image: str | None = None
                 image_topic = mp.get("image_topic",
                                      "/mobile_pole/axis_rgb_6_42/image_visualization")
@@ -173,7 +269,40 @@ class Narrator(Node):
             self.create_subscription(DetectedObjects, mp["objects_topic"],
                                      self.on_mobile_pole_objects, be)
             self.get_logger().info(f"mobile_pole trigger: {mp['objects_topic']} "
-                                   f"-> method={self._mp_method}")
+                                   f"-> method={self._mp_method}, "
+                                   f"trigger_distance_m={self._mp_trigger_distance_m}")
+
+        # Trigger 3: the robot's own camera/detector - optional, only
+        # set up if the config has a [robot] section. Vlm-only: the detector
+        # (vision_msgs/Detection2DArray) is 2D-pixel-space only (no real-world
+        # position), so it's used purely as the fire/cooldown signal; the
+        # scene description always comes from captioning the detector's own
+        # annotated frame (/robot/image_annotated), not from the boxes' text.
+        robot = cfg.get("robot")
+        if robot:
+            self._robot_hazard_classes = set(robot.get("hazard_classes", ["person"]))
+            self._robot_min_confidence = robot.get("min_confidence", 0.5)
+            self._robot_cooldown_s = robot.get("cooldown_s", 15.0)
+            self._robot_clear_grace_s = robot.get("clear_grace_s", 3.0)
+            self._robot_last_fired = 0.0
+            self._robot_active = False    # True while the current hazard is still in view
+            self._robot_clear_since: float | None = None
+            self._robot_latest_image: str | None = None
+
+            self._robot_context_bot = LLMBot(AgentConfig(**robot["context"]),
+                                             Action_Based_Narration_Output, CONFIGS_DIR)
+            self._robot_context_model = robot["context"]["model"]
+            self._robot_caption_bot = LLMBot(AgentConfig(**robot["caption"]),
+                                             Scene_Caption_Output, CONFIGS_DIR)
+            self._robot_caption_model = robot["caption"]["model"]
+
+            image_topic = robot.get("image_topic", "/robot/image_annotated")
+            self.create_subscription(RosImage, image_topic, self.on_robot_image, be)
+            objects_topic = robot.get("objects_topic", "/robot/detections")
+            self.create_subscription(Detection2DArray, objects_topic,
+                                     self.on_robot_detections, be)
+            self.get_logger().info(f"robot trigger: {objects_topic} -> method=vlm "
+                                   f"(image={image_topic})")
 
         self._mlflow = None
         if self.eval:
@@ -224,6 +353,20 @@ class Narrator(Node):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.get_logger().warning(f"mobile_pole image decode failed: {exc}")
 
+    def _ego_position_map(self):
+        """Ego (x, y) in the map frame via TF (map -> ego_frame), or None if the
+        transform isn't available yet (e.g. right at bag start)."""
+        try:
+            tf = self._tf_buffer.lookup_transform(self._mp_map_frame, self._mp_ego_frame,
+                                                  Time())   # Time() = latest available
+        except tf2_ros.TransformException as exc:
+            self.get_logger().warning(f"mobile_pole: no {self._mp_map_frame}->"
+                                      f"{self._mp_ego_frame} transform yet ({exc})",
+                                      throttle_duration_sec=5.0)
+            return None
+        t = tf.transform.translation
+        return t.x, t.y
+
     def on_mobile_pole_objects(self, msg: DetectedObjects) -> None:
         if not self._mp_method:
             return
@@ -231,22 +374,92 @@ class Narrator(Node):
         hazards = [o for o in objects
                   if OBJECT_LABELS.get(o["label"]) in self._mp_hazard_classes
                   and o["confidence"] >= self._mp_min_confidence]
-        if not hazards:
-            return
         now = time.monotonic()
+        if not hazards:
+            if self._mp_clear_since is None:
+                self._mp_clear_since = now
+            elif now - self._mp_clear_since >= self._mp_clear_grace_s:
+                self._mp_active = False      # genuinely gone; the next sighting can re-fire
+                self._mp_prev_distance_m = None   # next sighting re-evaluates the crossing fresh
+            return
+        self._mp_clear_since = None          # still/again present; cancel any pending clear
+
+        ego_xy = self._ego_position_map()
+        if ego_xy is None:
+            return                           # can't gate on distance without an ego pose
+        ex, ey = ego_xy
+        nearest = min(hazards, key=lambda o: math.hypot(o["position"][0] - ex,
+                                                        o["position"][1] - ey))
+        distance_m = math.hypot(nearest["position"][0] - ex, nearest["position"][1] - ey)
+        prev = self._mp_prev_distance_m
+        self._mp_prev_distance_m = distance_m
+        crossed_in = distance_m <= self._mp_trigger_distance_m and (
+            prev is None or prev > self._mp_trigger_distance_m)
+
+        if self._mp_active:
+            return                           # still the same hazard we already narrated
+        if not crossed_in:
+            return                           # not yet (or no longer) at the trigger distance
         if now - self._mp_last_fired < self._mp_cooldown_s:
             return
+        self._mp_active = True
         self._mp_last_fired = now
-        label = OBJECT_LABELS.get(max(hazards, key=lambda o: o["confidence"])["label"], "object")
+        label = OBJECT_LABELS.get(nearest["label"], "object")
+        self.get_logger().info(f"mobile_pole trigger fired: {label} at {distance_m:.1f}m")
         self._enqueue({"kind": "mobile_pole", "mp_objects": hazards,
                        "driving_action": (f"SLOW DOWN (external report) - the infrastructure "
-                                         f"reports a possible {label} hazard ahead")})
+                                         f"reports a possible {label} hazard {distance_m:.0f}m "
+                                         f"ahead")})
+
+    # ------------------------------------------------------------ trigger 3: robot
+    def on_robot_image(self, msg: RosImage) -> None:
+        try:
+            self._robot_latest_image = _ros_image_to_b64_jpeg(msg)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.get_logger().warning(f"robot image decode failed: {exc}")
+
+    def on_robot_detections(self, msg: Detection2DArray) -> None:
+        hazards = []
+        for det in msg.detections:
+            if not det.results:
+                continue
+            best = max(det.results, key=lambda r: r.hypothesis.score)
+            if (best.hypothesis.class_id in self._robot_hazard_classes
+                    and best.hypothesis.score >= self._robot_min_confidence):
+                hazards.append({"label": best.hypothesis.class_id,
+                                "confidence": best.hypothesis.score})
+        now = time.monotonic()
+        if not hazards:
+            if self._robot_clear_since is None:
+                self._robot_clear_since = now
+            elif now - self._robot_clear_since >= self._robot_clear_grace_s:
+                self._robot_active = False   # genuinely gone; the next sighting can re-fire
+            return
+        self._robot_clear_since = None       # still/again present; cancel any pending clear
+
+        if self._robot_latest_image is None:
+            return                           # no real frame buffered yet; can't caption safely
+        if self._robot_active:
+            return                           # still the same hazard we already narrated
+        if now - self._robot_last_fired < self._robot_cooldown_s:
+            return
+        self._robot_active = True
+        self._robot_last_fired = now
+        nearest = max(hazards, key=lambda h: h["confidence"])
+        label = nearest["label"]
+        self.get_logger().info(f"robot trigger fired: {label} "
+                               f"(confidence={nearest['confidence']:.2f})")
+        self._enqueue({"kind": "robot",
+                       "driving_action": (f"SLOW DOWN (robot camera) - the robot camera "
+                                         f"reports a possible {label} hazard nearby")})
 
     # ------------------------------------------------------------ shared queueing
     def _enqueue(self, job: dict) -> None:
         self._action_memory.append(job["driving_action"])
         if job.get("kind") == "mobile_pole" and self._mp_method == "vlm":
             job["image"] = self._mp_latest_image
+        elif job.get("kind") == "robot":
+            job["image"] = self._robot_latest_image
         try:
             self._jobs.put_nowait(job)
         except queue.Full:
@@ -264,8 +477,13 @@ class Narrator(Node):
                 self.get_logger().error(f"narration job failed: {exc}")
 
     def _narrate(self, job: dict) -> None:
-        res = (self._narrate_mobile_pole(job) if job.get("kind") == "mobile_pole"
-               else self._narrate_action(job))
+        kind = job.get("kind")
+        if kind == "mobile_pole":
+            res = self._narrate_mobile_pole(job)
+        elif kind == "robot":
+            res = self._narrate_robot(job)
+        else:
+            res = self._narrate_action(job)
         line = res.get("narration", "")
         if not line:
             self.get_logger().warning("empty narration; skipping.")
@@ -274,31 +492,57 @@ class Narrator(Node):
         self._memory.append(line)
         _, res["speech_s"] = _timed(lambda: (self.tts.speak(line), self.tts.wait(60.0)))
         self.event_count += 1
-        self.records.append(self._record(job, res))
+        row = self._record(job, res)
+        self.records.append(row)
+        if self._csv_path:
+            append_csv(self._csv_path, [row])   # one row per event, not buffered to exit
         if self._mlflow is not None:
             self._log(job, res)
 
     def _record(self, job: dict, res: dict) -> dict:
-        """Flat per-event row: the bots' outputs + their inference times."""
-        return {"pipeline": self.pipeline,
-                "event": job.get("kind", "event"),
-                "model": self._models.get("narration", ("", "?"))[1],
+        """Flat per-event row, shaped like eval/hazard_pipeline.csv: part/rep/
+        models/stage timings/scene_description/narration."""
+        kind = job.get("kind", "event")
+        if kind == "mobile_pole":
+            part = f"pole_{self._mp_method}"
+        elif kind == "robot":
+            part = "robot_vlm"
+        else:
+            part = kind
+        self._part_reps[part] = self._part_reps.get(part, 0) + 1
+        if kind == "mobile_pole":
+            stage1_model = self._mp_caption_model if self._mp_method == "vlm" else "no-model/text"
+            context_model = self._mp_context_model
+        elif kind == "robot":
+            stage1_model = self._robot_caption_model
+            context_model = self._robot_context_model
+        else:
+            stage1_model = ""
+            context_model = self._models.get("narration", ("", "?"))[1]
+        stage1_s = round(res.get("stage1_s", 0.0), 3)
+        context_s = round(res.get("narration_s", 0.0), 3)
+        speech_s = round(res.get("speech_s", 0.0), 3)
+        return {"part": part, "rep": self._part_reps[part],
+                "stage1_model": stage1_model, "context_model": context_model,
                 "driving_action": job.get("driving_action", ""),
-                "narration": res.get("narration", ""),
+                "stage1_s": stage1_s, "context_s": context_s, "speech_s": speech_s,
+                "total_s": round(stage1_s + context_s + speech_s, 3),
                 "scene_description": res.get("scene_description", ""),
-                "stage1_s": round(res.get("stage1_s", 0.0), 3),
-                "narration_s": round(res.get("narration_s", 0.0), 3),
-                "total_infer_s": round(sum(res.get(k, 0.0) for k in
-                                           ("stage1_s", "narration_s")), 3),
-                "speech_s": round(res.get("speech_s", 0.0), 3)}
+                "narration": res.get("narration", "")}
 
     def _narrate_action(self, job: dict) -> dict:
         out, s = _timed(lambda: self.narration.invoke(Action_Based_Narration_Input(
             driving_action=job["driving_action"],
             action_memory="\n".join(self._action_memory) or "(no readings)",
             narration_memory="\n".join(self._memory) or "(none yet)")))
-        self.get_logger().info(f"narration inference: {s:.2f} s")
+        self.get_logger().info(f"narration inference ({self._narration_model}): {s:.2f} s")
         return {"narration": out.narration.strip(), "narration_s": s}
+
+
+    # here the mobile-pole trigger has already decided to narrate, and the job dict
+    # contains the driving_action and the mp_objects (and possibly an image if
+    # method='vlm'). This method returns the narration text and the scene description
+    # (from detections or VLM caption) and the inference times for each stage. 
 
     def _narrate_mobile_pole(self, job: dict) -> dict:
         """detections -> text -> context LLM narration (method='detections'), or
@@ -313,8 +557,28 @@ class Narrator(Node):
             driving_action=job["driving_action"], scene_description=scene,
             action_memory="\n".join(self._action_memory) or "(no readings)",
             narration_memory="\n".join(self._memory) or "(none yet)")))
-        self.get_logger().info(f"mobile_pole stage1 ({self._mp_method}): {stage1_s:.2f}s "
-                               f"context: {ctx_s:.2f}s")
+        stage1_model = self._mp_caption_model if self._mp_method == "vlm" else "no-model/text"
+        self.get_logger().info(f"mobile_pole stage1 ({self._mp_method}, {stage1_model}): "
+                               f"{stage1_s:.2f}s context ({self._mp_context_model}): "
+                               f"{ctx_s:.2f}s")
+        return {"narration": ctx_out.narration.strip(), "scene_description": scene,
+                "stage1_s": stage1_s, "narration_s": ctx_s, "image": job.get("image")}
+
+    def _narrate_robot(self, job: dict) -> dict:
+        """robot's annotated frame -> VLM caption -> context LLM narration.
+        Always vlm: /robot/detections has no real-world position, so it's
+        used only as the fire/cooldown signal in on_robot_detections(), never
+        turned into scene-description text."""
+        cap_out, stage1_s = _timed(lambda: self._robot_caption_bot.invoke(
+            Scene_Caption_Input(), image=job.get("image")))
+        scene = cap_out.scene_description.strip()
+        ctx_out, ctx_s = _timed(lambda: self._robot_context_bot.invoke(Hazard_Narration_Input(
+            driving_action=job["driving_action"], scene_description=scene,
+            action_memory="\n".join(self._action_memory) or "(no readings)",
+            narration_memory="\n".join(self._memory) or "(none yet)")))
+        self.get_logger().info(f"robot stage1 (vlm, {self._robot_caption_model}): "
+                               f"{stage1_s:.2f}s context ({self._robot_context_model}): "
+                               f"{ctx_s:.2f}s")
         return {"narration": ctx_out.narration.strip(), "scene_description": scene,
                 "stage1_s": stage1_s, "narration_s": ctx_s, "image": job.get("image")}
 
@@ -342,7 +606,7 @@ class Narrator(Node):
                 m.log_text(res["scene_description"], "scene_description.txt")
             if res.get("image"):
                 try:
-                    m.log_image(_b64_to_pil(res["image"]), "mobile_pole_image.jpg")
+                    m.log_image(_b64_to_pil(res["image"]), f"{kind}_image.jpg")
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
@@ -363,7 +627,9 @@ def main(argv=None) -> None:
                         help="stop after N narration events (0 = run until interrupted)")
     parser.add_argument("--timeout", type=float, default=0.0,
                         help="stop after this many seconds (0 = no limit)")
-    parser.add_argument("--csv", default=None, help="append per-event rows to this CSV on exit")
+    parser.add_argument("--csv", default=str(DEFAULT_CSV),
+                        help="append each event here immediately as it happens "
+                        f"(default: {DEFAULT_CSV}); pass --csv \"\" to disable")
     parser.add_argument("--model", default=None, help="override all agents' model")
     parser.add_argument("--provider", default=None, help="override provider (ollama/openai)")
     parser.add_argument("--experiment", default="narration_eval", help="MLflow experiment")
@@ -372,7 +638,7 @@ def main(argv=None) -> None:
 
     rclpy.init(args=ros_argv)
     node = Narrator(cfg, use_tts=not opts.no_tts, eval_mode=opts.eval,
-                    experiment=opts.experiment)
+                    experiment=opts.experiment, csv_path=opts.csv)
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     start = time.monotonic()
@@ -389,9 +655,7 @@ def main(argv=None) -> None:
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
-        node.close()                               # joins the worker (last row is appended)
-        if opts.csv:
-            append_csv(opts.csv, list(node.records))
+        node.close()                               # joins the worker; CSV rows already flushed
         if rclpy.ok():
             rclpy.shutdown()
 
