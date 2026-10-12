@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import rclpy
@@ -44,6 +45,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from autoware_perception_msgs.msg import DetectedObjects          # noqa: E402
+from sensor_msgs.msg import CompressedImage                       # noqa: E402
 from sensor_msgs.msg import Image as RosImage                     # noqa: E402
 from vision_msgs.msg import Detection2DArray                      # noqa: E402
 from bot.bot import (AgentConfig, LLMBot,                         # noqa: E402
@@ -55,7 +57,7 @@ from utils.utils import load_env                                  # noqa: E402
 
 # --- the model ---------------------------------------------------------------
 PROVIDER = "ollama"                 # "ollama" (local) or "openai" (needs OPENAI_API_KEY)
-MODEL = "minicpm-v4.6:latest"
+MODEL = "minicpm-v4.5:latest"
 TEMPERATURE = 0.1
 PROMPT = SRC / "configs" / "narration_prompt.toml"
 
@@ -63,7 +65,15 @@ PROMPT = SRC / "configs" / "narration_prompt.toml"
 POLE_OBJECTS_TOPIC = "/mobile_pole/axis_rgb_6_42/autoware_objects_3d"
 POLE_IMAGE_TOPIC = "/mobile_pole/axis_rgb_6_42/image_visualization"
 ROBOT_OBJECTS_TOPIC = "/robot/detections"
+# Bags disagree on the robot feed: overlap_02 carries the raw Image, the DRONE
+# bags carry the compressed one. Subscribe to both and use whichever arrives.
 ROBOT_IMAGE_TOPIC = "/robot/image_annotated"
+ROBOT_IMAGE_COMPRESSED_TOPIC = "/robot/image_annotated/compressed"
+# The drones publish an annotated camera feed and nothing else - no detector,
+# so there is no hazard signal to gate on. Each narrates once, on its first
+# frame, describing whatever that frame shows.
+CAMERA_ONLY_SOURCES = {"drone": "/drone/image_annotated/compressed",
+                       "dji": "/dji/image_annotated/compressed"}
 
 # --- when a detection is worth narrating -------------------------------------
 POLE_HAZARD_CLASSES = {"pedestrian"}   # autoware_perception_msgs ObjectClassification
@@ -89,6 +99,19 @@ def _ros_image_to_b64_jpeg(msg: RosImage) -> str:
                           "raw", raw_mode, msg.step).convert("RGB")
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _compressed_to_b64_jpeg(msg) -> str:
+    """sensor_msgs/CompressedImage -> base64 JPEG. The drone and robot feeds
+    are already JPEG on the wire, so those pass straight through untouched;
+    anything else (png) is decoded and re-encoded."""
+    from PIL import Image
+    data = bytes(msg.data)
+    if data[:2] == b"\xff\xd8":                 # JPEG magic: no re-encode needed
+        return base64.b64encode(data).decode("ascii")
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(data)).convert("RGB").save(buf, format="JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -153,6 +176,7 @@ class Narrator(Node):
         self._robot_image: str | None = None
         self._robot_image_t = 0.0
         self._robot_done = False
+        self._camera_only_done: dict[str, bool] = {}   # keyed by source name
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
@@ -163,10 +187,16 @@ class Narrator(Node):
         self.create_subscription(DetectedObjects, POLE_OBJECTS_TOPIC,
                                  self.on_pole_objects, qos)
         self.create_subscription(RosImage, ROBOT_IMAGE_TOPIC, self.on_robot_image, qos)
+        self.create_subscription(CompressedImage, ROBOT_IMAGE_COMPRESSED_TOPIC,
+                                 self.on_robot_image_compressed, qos)
         self.create_subscription(Detection2DArray, ROBOT_OBJECTS_TOPIC,
                                  self.on_robot_detections, qos)
-        self.get_logger().info(f"narrator running on {MODEL} | "
-                               f"pole={POLE_OBJECTS_TOPIC} robot={ROBOT_OBJECTS_TOPIC}")
+        for source, topic in CAMERA_ONLY_SOURCES.items():
+            self.create_subscription(CompressedImage, topic,
+                                     partial(self.on_camera_only_image, source), qos)
+        self.get_logger().info(
+            f"narrator running on {MODEL} | sources: mobile_pole, robot, "
+            + ", ".join(CAMERA_ONLY_SOURCES))
 
     # ------------------------------------------------------------ mobile pole
     def on_pole_image(self, msg: RosImage) -> None:
@@ -221,6 +251,12 @@ class Narrator(Node):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self.get_logger().warning(f"robot image decode failed: {exc}")
 
+    def on_robot_image_compressed(self, msg: CompressedImage) -> None:
+        try:
+            self._robot_image, self._robot_image_t = _compressed_to_b64_jpeg(msg), time.time()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.get_logger().warning(f"robot compressed image decode failed: {exc}")
+
     def on_robot_detections(self, msg: Detection2DArray) -> None:
         """Narrate once, the first time the detector sees a hazard. Its boxes
         are 2D pixel space with no real-world position, so unlike the pole
@@ -237,6 +273,22 @@ class Narrator(Node):
         self.get_logger().info(f"robot trigger fired (once): {best.hypothesis.class_id} "
                                f"(confidence={best.hypothesis.score:.2f})")
         self._enqueue("robot", "", self._robot_image, self._robot_image_t)
+
+    # ------------------------------------------------------------ drones
+    def on_camera_only_image(self, source: str, msg: CompressedImage) -> None:
+        """A source that publishes a camera feed and nothing else. With no
+        detector there is no hazard signal to wait for, so it narrates once on
+        its first frame and describes whatever that frame shows."""
+        if self._camera_only_done.get(source):
+            return
+        try:
+            image = _compressed_to_b64_jpeg(msg)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.get_logger().warning(f"{source} image decode failed: {exc}")
+            return
+        self._camera_only_done[source] = True
+        self.get_logger().info(f"{source} trigger fired (once): first frame")
+        self._enqueue(source, "", image, time.time())
 
     # ------------------------------------------------------------ narration
     def _enqueue(self, source: str, detections: str, image: str, image_t: float) -> None:
