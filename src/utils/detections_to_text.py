@@ -1,13 +1,11 @@
 """Turn autoware_perception_msgs/DetectedObjects into plain text.
 
-Pure formatting, no model call - this is the "free" stage-1 text for Part B of
-the hazard-pipeline comparison (vs. Part A, which spends a VLM call captioning
-the image into text).
+Pure formatting, no model call: main.py passes the result to the narration
+model as the optional object-list hint alongside the camera frame.
 
-parse_detected_objects() has no ROS import, so it works on EITHER a real
-rclpy-deserialized message (live subscription, main.py) or an mcap_ros2
-dynamically-built message (offline file reading, eval_hazard_pipeline.py) -
-both expose the same attribute shapes.
+parse_detected_objects() has no ROS import, so it works on either a real
+rclpy-deserialized message or an mcap_ros2 dynamically-built one (offline
+file reading) - both expose the same attribute shapes.
 """
 from __future__ import annotations
 

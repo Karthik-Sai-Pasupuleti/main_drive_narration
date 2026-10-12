@@ -1,8 +1,8 @@
 # main_drive_narration - self-contained narration container.
 #
 # This pipeline has no RViz and no screen capture: main.py subscribes directly
-# to the planning/mobile-pole ROS topics (including the mobile pole's own
-# camera image topic for vision), so the image only needs ROS 2 Humble's base
+# to the mobile-pole/robot ROS topics (including each source's own camera
+# image topic for vision), so the image only needs ROS 2 Humble's base
 # install (no "-desktop"/RViz/Qt), the two Autoware message packages those
 # topics use, rosbag2's mcap storage plugin to play the recording, and Kokoro
 # TTS with its weights baked in.
@@ -72,7 +72,7 @@ RUN pip3 install --no-cache-dir \
 RUN pip3 install --no-cache-dir \
       kokoro \
       langchain-core langchain-ollama langchain-openai \
-      mlflow ollama \
+      ollama requests \
       "numpy>=1.26" "pillow>=10.4" tomli
 
 ENV HF_HOME=/opt/hf

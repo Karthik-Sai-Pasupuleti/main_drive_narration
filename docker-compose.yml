@@ -1,10 +1,12 @@
 # main_drive_narration - containerized demo.
 #
-#   export BAG_PATH=/path/to/rosbag2_2026_05_28-13_40_16   # folder with metadata.yaml
-#   cp .env.example .env && edit in OPENAI_API_KEY          # narration's default provider
+#   export BAG_PATH=/path/to/rosbag2_folder                # folder with metadata.yaml
 #   docker compose build
 #   docker compose up -d
-#   docker compose exec ollama ollama pull phi4-mini        # mobile_pole.context's model
+#   docker compose exec ollama ollama pull gemma4:latest    # main.py's MODEL
+#
+#   # only if main.py's PROVIDER is switched to "openai":
+#   cp .env.example .env && edit in OPENAI_API_KEY
 #
 #   # terminal 1
 #   docker compose exec narration bash -lc 'printf "\n" | ./launch/action_pipeline/run_demo.sh'
@@ -42,11 +44,8 @@ services:
     volumes:
       # The rosbag stays on the host. Read-only so playback cannot damage it.
       - ${BAG_PATH:?set BAG_PATH to the rosbag folder containing metadata.yaml}:/data/bag:ro
-      # --csv output and mlflow's local run store, kept across restarts.
-      - ./output:/app/output
-      - ./mlruns:/app/mlruns
-      # API keys stay on the host - action_pipeline.toml's narration agent
-      # defaults to provider = "openai" (gpt-4o-mini), which needs this.
+      # API keys stay on the host - only needed when main.py's PROVIDER
+      # constant is set to "openai".
       - ./.env:/app/.env:ro
     # ROS 2's DDS passes messages through shared memory. Docker's 64 MB default
     # makes node discovery crawl and eventually stall.

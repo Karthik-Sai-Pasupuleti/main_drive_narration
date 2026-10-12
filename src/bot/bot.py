@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 from pydantic import AliasChoices, BaseModel, Field
@@ -13,45 +11,21 @@ _BLANK_IMAGE = ("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP/////////////////////////////
                 "AREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=")
 
 
-class Action_Based_Narration_Input(BaseModel):
-    """Text inputs for the single-agent narration model (image passed separately).
-    Fields match the actions_promt.toml placeholders. Covers turns only - hazard
-    reports come from the mobile-pole trigger (Hazard_Narration_Input) instead."""
+class Narration_Input(BaseModel):
+    """What the narration agent is given: the reporting camera's frame, which
+    camera it is, and optionally that detector's object list. `image` is
+    routed to the vision slot; the rest fill narration_prompt.toml."""
 
-    driving_action: str = Field(description="the ground-truth driving action")
-    action_memory: str = Field(default="(no readings)", description="recent HUD actions")
-    narration_memory: str = Field(default="(none yet)", description="previous narrations")
-
-class Action_Based_Narration_Output(BaseModel):
-    """Structured narration reply the model must return as JSON."""
-
-    narration: str = Field(description="one warm, present-tense, first-person-plural sentence "
-                            "for the passenger, at most 14 words, grounded in the scene")
+    image: str = Field(description="base64 JPEG frame from the reporting camera")
+    source: str = Field(description="camera that reported it: mobile_pole, robot or drone")
+    detections: str = Field(default="", description="optional object list from the "
+                            "source's ROS detections")
 
 
-## mobile-pole hazard pipeline: image-caption / detections-to-text input and
-## output classes, shared by main.py (live) and eval_hazard_pipeline.py (offline)
+class Narration_Output(BaseModel):
+    """What the model returns: the spoken line, nothing else."""
 
-class Scene_Caption_Input(BaseModel):
-    """No text fields - the image is passed via LLMBot.invoke(image=...)."""
-
-
-class Scene_Caption_Output(BaseModel):
-    """Part A stage 1: caption the image into a factual scene_description."""
-
-    scene_description: str = Field(description="factual description of the image")
-
-
-class Hazard_Narration_Input(BaseModel):
-    """Shared stage-2 input for both hazard-pipeline parts: a scene_description
-    (from either a VLM caption or detections_to_text()) + the usual context.
-    Fields match hazard_context_prompt.toml's placeholders. The mobile pole IS
-    the infrastructure source here - there is no separate drone/infra report."""
-
-    driving_action: str = Field(description="the ground-truth driving action")
-    scene_description: str = Field(description="factual scene text (from either part)")
-    action_memory: str = Field(default="(no readings)", description="recent HUD actions")
-    narration_memory: str = Field(default="(none yet)", description="previous narrations")
+    narration: str = Field(description="the passenger narration for this hazard")
 
 
 class AgentConfig(BaseModel):
@@ -92,18 +66,15 @@ class LLMBot:
     structured Pydantic object. Model / temperature / provider come from the
     AgentConfig; the prompt file supplies system_prompt + user_template."""
 
-    def __init__(self, cfg: AgentConfig, output_model: type[BaseModel],
-                 prompts_dir: str = "") -> None:
+    def __init__(self, cfg: AgentConfig, output_model: type[BaseModel]) -> None:
         """Build the prompt + model chain.
 
         Args:
             cfg (AgentConfig): provider / model / temperature / prompt path / vision.
             output_model (type[BaseModel]): schema the model must return as JSON.
-            prompts_dir (str): base dir the cfg.prompt path is resolved against.
         """
         self.vision = cfg.vision
-        prompt_path = str(Path(prompts_dir) / cfg.prompt) if prompts_dir else cfg.prompt
-        pcfg = PromptConfig(**load_config(prompt_path))
+        pcfg = PromptConfig(**load_config(cfg.prompt))
         model = _make_model(cfg)
         if cfg.vision:
             human = ("human", [
@@ -135,19 +106,3 @@ class LLMBot:
                 image = image or fields.pop(key)
             fields["image_data"] = image or _BLANK_IMAGE
         return self.chain.invoke(fields)
-
-    
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
